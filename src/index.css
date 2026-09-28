@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primary: #FF5B26;
+  --color-primary-hover: #E04815;
+  --color-brand-orange: #FF5B26;
+  --color-surface: #FFF0EB;
+  --color-surface-raised: #FFE2D6;
+  --color-surface-hover: #FCD2C1;
+  --color-border-subtle: rgba(241, 90, 38, 0.12);
+  --color-border-strong: rgba(241, 90, 38, 0.3);
+
+  --color-text-primary: #0F172A;
+  --color-text-secondary: #475569;
+  --color-text-muted: #64748B;
+}
+
+@layer base {
+  html, body {
+    background-color: #FFFFFF;
+    color: #1E293B;
+    scroll-behavior: smooth;
+    @apply antialiased font-sans min-h-screen;
+  }
+  ::selection {
+    background-color: #FF5B26;
+    color: #FFFFFF;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-primary-500 text-white px-4 py-2.5 rounded-lg font-medium hover:bg-primary-600 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply bg-slate-100 text-slate-900 border border-slate-200 px-4 py-2.5 rounded-lg font-medium hover:bg-slate-200 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2;
+  }
+  .btn-outline {
+    @apply bg-transparent text-primary-500 border border-primary-500 px-4 py-2.5 rounded-lg font-medium hover:bg-orange-50 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2;
+  }
+  .input-field {
+    @apply w-full px-4 py-2.5 rounded-lg border border-slate-200 bg-white text-slate-900 focus:border-primary-500 focus:ring-2 focus:ring-primary-200 transition-all duration-200 outline-none;
+  }
+  .card { @apply bg-white rounded-card border border-slate-100 p-6; }
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  .badge-success { @apply bg-green-50 text-green-700; }
+  .badge-warning { @apply bg-amber-50 text-amber-700; }
+  .badge-error { @apply bg-red-50 text-red-700; }
+  .badge-info { @apply bg-blue-50 text-blue-700; }
+  .badge-neutral { @apply bg-slate-900 text-white; }
+  .sidebar-link {
+    @apply flex items-center gap-3 px-4 py-2.5 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors duration-200;
+  }
+  .sidebar-link-active {
+    @apply bg-orange-50 text-primary-500 font-medium;
+  }
+  .bottom-nav-link {
+    @apply flex flex-col items-center gap-0.5 text-xs text-slate-500 transition-colors duration-200;
+  }
+  .bottom-nav-link-active {
+    @apply text-primary-500;
+  }
+}
+
+/* Custom animations & map Pulse effects */
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(241, 90, 38, 0.7);
+  }
+
+  70% {
+    transform: scale(1.15);
+    box-shadow: 0 0 0 14px rgba(241, 90, 38, 0);
+  }
+
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(241, 90, 38, 0);
+  }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 2.5s infinite cubic-bezier(0.45, 0, 0.55, 1);
+}
+
+/* Glassmorphism utilities */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.glass-card {
+  background: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+/* Scrollbar styles */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #FFF0EB;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #FCD2C1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #F15A26;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in { animation: fadeIn 0.3s ease-out; }
+
+@keyframes bounceSlow {
+  0%, 100% { transform: translateY(-6px); }
+  50% { transform: translateY(0); }
+}
+.animate-bounce-slow { animation: bounceSlow 4s infinite ease-in-out; }
