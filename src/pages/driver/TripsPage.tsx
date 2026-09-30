@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatDateTime } from "@/utils/formatDate";
-import { formatCurrency } from "@/utils/formatCurrency";
 import { getRideHistory } from "@/services/DriverBooking";
 import { RideDetailsModal } from "@/components/booking/RideDetailsModal";
 import { Eye, RefreshCw, AlertCircle } from "lucide-react";
@@ -15,6 +14,9 @@ interface Trip {
   updatedAt?: string;
   date?: string;
   completedAt?: string;
+  startedAt?: string;
+  driverAssignedAt?: string;
+  cancelledAt?: string;
   pickup?: any;
   pickupLocation?: string;
   pickupAddress?: string;
@@ -24,13 +26,27 @@ interface Trip {
   dropAddress?: string;
   distance?: number;
   distanceKm?: number;
+  distanceMiles?: number;
   totalDistance?: number;
+  durationMinutes?: number;
+  etaMinutes?: number;
+  duration?: number;
   amount?: number;
   fare?: any;
   totalFare?: number;
   payableFare?: number;
   totalAmount?: number;
+  discount?: number;
+  promoCode?: string;
+  passengerCount?: number;
+  paymentMethod?: string;
+  paymentStatus?: string;
+  paymentCollectedAt?: string;
+  notes?: string;
+  vehicleType?: any;
+  passenger?: any;
   status?: string;
+  rideType?: string;
 }
 
 const ITEMS_PER_PAGE = 10;
@@ -42,6 +58,7 @@ export function TripsPage() {
   const [error, setError] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
+  const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
 
   const fetchTrips = async () => {
     try {
@@ -165,39 +182,80 @@ export function TripsPage() {
   const getDistance = (trip: Trip) =>
     trip.distanceKm ?? trip.distance ?? trip.totalDistance ?? 0;
 
+  const getDuration = (trip: Trip) =>
+    trip.durationMinutes ?? trip.duration ?? trip.etaMinutes ?? 0;
+
   const getAmount = (trip: Trip) =>
-    trip.totalFare ??
     trip.payableFare ??
-    trip.fare?.totalFare ??
-    trip.fare?.payableFare ??
+    trip.totalFare ??
+    (typeof trip.fare === 'number' ? trip.fare : (trip.fare?.payableFare ?? trip.fare?.totalFare)) ??
     trip.amount ??
     trip.totalAmount ??
     0;
 
+  const formatTripFare = (trip: Trip) => {
+    const amount = getAmount(trip);
+    const curr = trip.fare?.currency || "USD";
+    try {
+      return new Intl.NumberFormat(curr === 'INR' ? 'en-IN' : 'en-US', {
+        style: 'currency',
+        currency: curr,
+        minimumFractionDigits: 2,
+      }).format(amount);
+    } catch {
+      return `${curr === 'INR' ? '₹' : '$'}${amount.toFixed(2)}`;
+    }
+  };
+
+  const getPassengerName = (trip: Trip) =>
+    trip.passenger?.fullName ||
+    (trip.passenger?.firstName
+      ? `${trip.passenger.firstName} ${trip.passenger.lastName || ''}`.trim()
+      : '') ||
+    trip.passenger?.name ||
+    'Passenger';
+
+  const getPassengerPhone = (trip: Trip) =>
+    trip.passenger?.phoneNumber ||
+    trip.passenger?.phone ||
+    '';
+
   const getStatus = (trip: Trip) => {
     if (trip.status === "RIDE_COMPLETED") return "Completed";
     if (trip.status === "RIDE_CANCELLED") return "Cancelled";
-    return trip.status || "Completed";
+    if (trip.status === "RIDE_STARTED" || trip.status === "IN_PROGRESS") return "In Progress";
+    if (trip.status === "DRIVER_ASSIGNED") return "Assigned";
+    return trip.status ? trip.status.replace(/_/g, ' ') : "Completed";
   };
 
   const getStatusClass = (status: string) => {
     switch (status.toLowerCase()) {
       case "completed":
-      case "complete":
+      case "ride_completed":
       case "paid":
-        return "bg-green-100 text-green-700";
+        return "bg-emerald-50 text-emerald-700 border border-emerald-200";
 
       case "cancelled":
+      case "ride_cancelled":
       case "canceled":
-        return "bg-red-100 text-red-700";
+        return "bg-rose-50 text-rose-700 border border-rose-200";
 
       case "started":
-      case "ongoing":
+      case "in progress":
+      case "ride_started":
       case "in_progress":
-        return "bg-blue-100 text-blue-700";
+        return "bg-blue-50 text-blue-700 border border-blue-200";
 
       default:
-        return "bg-yellow-100 text-yellow-700";
+        return "bg-amber-50 text-amber-700 border border-amber-200";
+    }
+  };
+
+  const handleOpenDetails = (trip: Trip) => {
+    const tripId = getTripId(trip);
+    if (tripId !== '-') {
+      setSelectedRideId(tripId);
+      setSelectedTrip(trip);
     }
   };
 
@@ -284,15 +342,15 @@ export function TripsPage() {
                 </th>
 
                 <th className="px-5 py-3.5 text-left text-xs font-bold uppercase tracking-wider text-gray-400">
-                  Pickup Location
+                  Passenger
                 </th>
 
                 <th className="px-5 py-3.5 text-left text-xs font-bold uppercase tracking-wider text-gray-400">
-                  Dropoff Location
+                  Pickup & Dropoff
                 </th>
 
                 <th className="px-5 py-3.5 text-left text-xs font-bold uppercase tracking-wider text-gray-400">
-                  Distance
+                  Distance & Time
                 </th>
 
                 <th className="px-5 py-3.5 text-left text-xs font-bold uppercase tracking-wider text-gray-400">
@@ -309,7 +367,7 @@ export function TripsPage() {
               </tr>
             </thead>
 
-            <tbody className="divide-y divide-gray-200 bg-white">
+            <tbody className="divide-y divide-gray-100 bg-white">
               {loading &&
                 Array.from({ length: 5 }).map((_, index) => (
                   <tr key={index}>
@@ -317,7 +375,7 @@ export function TripsPage() {
                       (_, cellIndex) => (
                         <td
                           key={cellIndex}
-                          className="px-4 py-4"
+                          className="px-5 py-4"
                         >
                           <div className="h-4 w-24 animate-pulse rounded bg-gray-200" />
                         </td>
@@ -330,50 +388,86 @@ export function TripsPage() {
                 paginatedTrips.map((trip) => {
                   const status = getStatus(trip);
                   const tripId = getTripId(trip);
+                  const passName = getPassengerName(trip);
+                  const passPhone = getPassengerPhone(trip);
+                  const distance = getDistance(trip);
+                  const duration = getDuration(trip);
 
                   return (
                     <tr
                       key={tripId}
-                      className="hover:bg-gray-50/80 transition-colors cursor-pointer"
-                      onClick={() => tripId !== '-' && setSelectedRideId(tripId)}
+                      className="hover:bg-gray-50/80 transition-colors cursor-pointer group"
+                      onClick={() => handleOpenDetails(trip)}
                     >
-                      <td className="whitespace-nowrap px-4 py-4 text-xs font-mono font-medium text-gray-900">
-                        {tripId}
+                      <td className="whitespace-nowrap px-5 py-4">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-mono font-bold text-gray-900 group-hover:text-[#FF5B26] transition-colors">
+                            {tripId}
+                          </span>
+                          {trip.rideType && (
+                            <span className="text-[10px] font-semibold text-gray-500 uppercase">
+                              {trip.rideType}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
-                      <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-600">
+                      <td className="whitespace-nowrap px-5 py-4 text-xs text-gray-600">
                         {getTripDate(trip)
-                          ? formatDateTime(
-                              getTripDate(trip)
-                            )
+                          ? formatDateTime(getTripDate(trip))
                           : "-"}
                       </td>
 
-                      <td
-                        className="max-w-[220px] truncate px-4 py-4 text-sm text-gray-600"
-                        title={getPickup(trip)}
-                      >
-                        {getPickup(trip)}
+                      <td className="whitespace-nowrap px-5 py-4">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-full bg-orange-50 text-[#FF5B26] flex items-center justify-center font-bold text-xs shrink-0">
+                            {passName.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-gray-900 truncate">
+                              {passName}
+                            </p>
+                            {passPhone && (
+                              <p className="text-[11px] text-gray-500 truncate">
+                                {passPhone}
+                              </p>
+                            )}
+                          </div>
+                        </div>
                       </td>
 
-                      <td
-                        className="max-w-[220px] truncate px-4 py-4 text-sm text-gray-600"
-                        title={getDrop(trip)}
-                      >
-                        {getDrop(trip)}
+                      <td className="max-w-[260px] px-5 py-4 text-xs space-y-1">
+                        <div className="flex items-start gap-1.5 truncate" title={getPickup(trip)}>
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 mt-1" />
+                          <span className="text-gray-700 truncate">{getPickup(trip)}</span>
+                        </div>
+                        <div className="flex items-start gap-1.5 truncate" title={getDrop(trip)}>
+                          <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0 mt-1" />
+                          <span className="text-gray-700 truncate">{getDrop(trip)}</span>
+                        </div>
                       </td>
 
-                      <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-600">
-                        {getDistance(trip)} km
+                      <td className="whitespace-nowrap px-5 py-4 text-xs text-gray-600">
+                        <span className="font-semibold text-gray-900">{distance} km</span>
+                        {duration > 0 && (
+                          <span className="text-gray-400 block text-[11px]">{duration} mins</span>
+                        )}
                       </td>
 
-                      <td className="whitespace-nowrap px-4 py-4 text-sm font-bold text-gray-900">
-                        {formatCurrency(getAmount(trip))}
+                      <td className="whitespace-nowrap px-5 py-4 text-xs">
+                        <span className="font-bold text-gray-900 text-sm">
+                          {formatTripFare(trip)}
+                        </span>
+                        {trip.paymentMethod && (
+                          <span className="text-[10px] text-gray-400 block uppercase">
+                            {trip.paymentMethod} • {trip.paymentStatus || 'PAID'}
+                          </span>
+                        )}
                       </td>
 
-                      <td className="px-4 py-4">
+                      <td className="px-5 py-4">
                         <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${getStatusClass(
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(
                             status
                           )}`}
                         >
@@ -381,14 +475,14 @@ export function TripsPage() {
                         </span>
                       </td>
 
-                      <td className="px-4 py-4 text-right">
+                      <td className="px-5 py-4 text-right">
                         <button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (tripId !== '-') setSelectedRideId(tripId);
+                            handleOpenDetails(trip);
                           }}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-[#FF5B26] hover:bg-orange-50 rounded-lg transition-colors"
+                          className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-[#FF5B26] bg-orange-50/60 hover:bg-orange-100 hover:text-[#e04f20] rounded-xl transition-all shadow-sm"
                         >
                           <Eye className="w-3.5 h-3.5" />
                           Details
@@ -415,21 +509,21 @@ export function TripsPage() {
         </div>
 
         {!loading && filteredTrips.length > 0 && (
-          <div className="flex items-center justify-between border-t border-gray-200 px-4 py-4">
-            <p className="text-sm text-gray-500">
+          <div className="flex items-center justify-between border-t border-gray-200 px-5 py-4">
+            <p className="text-xs text-gray-500">
               Showing{" "}
-              <span className="font-medium text-gray-700">
+              <span className="font-semibold text-gray-700">
                 {(currentPage - 1) * ITEMS_PER_PAGE + 1}
               </span>{" "}
               to{" "}
-              <span className="font-medium text-gray-700">
+              <span className="font-semibold text-gray-700">
                 {Math.min(
                   currentPage * ITEMS_PER_PAGE,
                   filteredTrips.length
                 )}
               </span>{" "}
               of{" "}
-              <span className="font-medium text-gray-700">
+              <span className="font-semibold text-gray-700">
                 {filteredTrips.length}
               </span>
             </p>
@@ -443,12 +537,12 @@ export function TripsPage() {
                     Math.max(page - 1, 1)
                   )
                 }
-                className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
               >
                 Previous
               </button>
 
-              <span className="rounded-lg bg-primary-500 px-3 py-2 text-sm font-medium text-white">
+              <span className="rounded-xl bg-[#FF5B26] px-3 py-1.5 text-xs font-semibold text-white shadow-sm">
                 {currentPage} / {totalPages}
               </span>
 
@@ -460,7 +554,7 @@ export function TripsPage() {
                     Math.min(page + 1, totalPages)
                   )
                 }
-                className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-xl border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
               >
                 Next
               </button>
@@ -472,9 +566,14 @@ export function TripsPage() {
       {/* Ride Details Modal */}
       <RideDetailsModal
         rideId={selectedRideId}
+        initialData={selectedTrip}
         isOpen={Boolean(selectedRideId)}
-        onClose={() => setSelectedRideId(null)}
+        onClose={() => {
+          setSelectedRideId(null);
+          setSelectedTrip(null);
+        }}
       />
     </div>
   );
 }
+

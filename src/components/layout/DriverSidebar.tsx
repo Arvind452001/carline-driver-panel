@@ -12,7 +12,7 @@ import {
   Settings,
   LogOut,
   X,
-  Users,
+  // Users,
   ShieldCheck,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
@@ -26,7 +26,7 @@ interface SidebarProps {
 
 const navItems = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { path: '/driver-manager', label: 'Driver Manager', icon: Users },
+  // { path: '/driver-manager', label: 'Driver Manager', icon: Users },
   { path: '/earnings', label: 'Today Earnings', icon: DollarSign },
   { path: '/trips', label: 'Trips', icon: MapPin },
   { path: '/online-hours', label: 'Online Hours', icon: Clock },

@@ -7,20 +7,29 @@ import {
   CheckCircle2,
   Navigation,
   Phone,
+  Car,
+  FileText,
+  Tag,
+  Users,
 } from 'lucide-react';
-import { getRideById } from '@/services/DriverBooking';
+import { getRideById, getRideRequestById } from '@/services/DriverBooking';
 import { getErrorMessage } from '@/services/axiosClient';
-import { formatCurrency } from '@/utils/formatCurrency';
 import { formatDateTime } from '@/utils/formatDate';
 
 interface RideDetailsModalProps {
   rideId: string | null;
+  initialData?: any;
   isOpen: boolean;
   onClose: () => void;
 }
 
-export function RideDetailsModal({ rideId, isOpen, onClose }: RideDetailsModalProps) {
-  const [ride, setRide] = useState<any>(null);
+export function RideDetailsModal({
+  rideId,
+  initialData,
+  isOpen,
+  onClose,
+}: RideDetailsModalProps) {
+  const [ride, setRide] = useState<any>(initialData || null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,10 +37,42 @@ export function RideDetailsModal({ rideId, isOpen, onClose }: RideDetailsModalPr
     try {
       setLoading(true);
       setError(null);
-      const data = await getRideById(id);
-      setRide(data);
+      let data = null;
+
+      // 1. Try ride details endpoint (for assigned/active/completed rides)
+      try {
+        data = await getRideById(id);
+      } catch {
+        data = null;
+      }
+
+      // 2. Try request details endpoint (for pending requests)
+      if (!data) {
+        try {
+          data = await getRideRequestById(id);
+        } catch {
+          data = null;
+        }
+      }
+
+      // 3. Fallback to initialData if available
+      if (!data && initialData) {
+        data = initialData;
+      }
+
+      if (!data) {
+        throw new Error('Unable to retrieve ride details.');
+      }
+
+      // Merge initialData with fetched data so no fields are lost
+      setRide(initialData ? { ...initialData, ...data } : data);
     } catch (err) {
-      setError(getErrorMessage(err));
+      if (initialData) {
+        setRide(initialData);
+        setError(null);
+      } else {
+        setError(getErrorMessage(err));
+      }
     } finally {
       setLoading(false);
     }
@@ -39,49 +80,85 @@ export function RideDetailsModal({ rideId, isOpen, onClose }: RideDetailsModalPr
 
   useEffect(() => {
     if (isOpen && rideId) {
+      if (initialData) {
+        setRide(initialData);
+      }
       fetchDetails(rideId);
     } else {
       setRide(null);
       setError(null);
     }
-  }, [isOpen, rideId]);
+  }, [isOpen, rideId, initialData]);
 
   if (!isOpen) return null;
+
+  const currency = ride?.fare?.currency || ride?.currency || 'USD';
+  const formatMoney = (val: number | undefined | null) => {
+    if (val === undefined || val === null || isNaN(Number(val))) return `$0.00`;
+    const num = Number(val);
+    try {
+      return new Intl.NumberFormat(currency === 'INR' ? 'en-IN' : 'en-US', {
+        style: 'currency',
+        currency: currency,
+        minimumFractionDigits: 2,
+      }).format(num);
+    } catch {
+      return `${currency === 'INR' ? '₹' : '$'}${num.toFixed(2)}`;
+    }
+  };
 
   const getStatusColor = (status: string = '') => {
     switch (status.toUpperCase()) {
       case 'COMPLETED':
+      case 'RIDE_COMPLETED':
       case 'PAID':
         return 'bg-emerald-50 text-emerald-700 border-emerald-200';
       case 'ACCEPTED':
+      case 'DRIVER_ASSIGNED':
       case 'ARRIVED':
+      case 'DRIVER_ARRIVED':
       case 'STARTED':
+      case 'RIDE_STARTED':
       case 'IN_PROGRESS':
         return 'bg-blue-50 text-blue-700 border-blue-200';
       case 'CANCELLED':
+      case 'RIDE_CANCELLED':
         return 'bg-rose-50 text-rose-700 border-rose-200';
       default:
         return 'bg-amber-50 text-amber-700 border-amber-200';
     }
   };
 
+  const formatStatusText = (status: string = '') => {
+    if (!status) return 'Completed';
+    return status.replace(/_/g, ' ');
+  };
+
   const pickupAddr =
-    typeof ride?.pickup === 'string'
-      ? ride.pickup
-      : ride?.pickup?.address || ride?.pickupAddress || 'Pickup location not specified';
+    (typeof ride?.pickup === 'string' ? ride.pickup : null) ||
+    ride?.pickup?.address ||
+    ride?.pickupAddress ||
+    ride?.pickupLocation ||
+    'Pickup location not specified';
 
   const dropAddr =
-    typeof ride?.dropoff === 'string'
-      ? ride.dropoff
-      : ride?.dropoff?.address ||
-        (typeof ride?.drop === 'string'
-          ? ride.drop
-          : ride?.drop?.address || ride?.dropAddress || 'Drop location not specified');
+    (typeof ride?.dropoff === 'string' ? ride.dropoff : null) ||
+    ride?.dropoff?.address ||
+    (typeof ride?.drop === 'string' ? ride.drop : null) ||
+    ride?.drop?.address ||
+    ride?.dropAddress ||
+    ride?.dropoffAddress ||
+    ride?.dropLocation ||
+    'Dropoff destination not specified';
 
   const passengerName =
     ride?.passenger?.fullName ||
+    (ride?.passenger?.firstName
+      ? `${ride.passenger.firstName} ${ride.passenger.lastName || ''}`.trim()
+      : '') ||
     ride?.passenger?.name ||
     ride?.user?.name ||
+    ride?.passengerName ||
     ride?.userName ||
     'Passenger';
 
@@ -90,24 +167,43 @@ export function RideDetailsModal({ rideId, isOpen, onClose }: RideDetailsModalPr
     ride?.passenger?.phone ||
     ride?.user?.phone ||
     ride?.phoneNumber ||
-    'Not provided';
+    '';
 
   const fareTotal =
-    ride?.totalFare ??
     ride?.payableFare ??
-    ride?.fare?.totalFare ??
-    ride?.fare?.payableFare ??
+    ride?.totalFare ??
+    (typeof ride?.fare === 'number'
+      ? ride.fare
+      : (ride?.fare?.payableFare ?? ride?.fare?.totalFare)) ??
     ride?.fareBreakdown?.total ??
-    ride?.fare ??
+    ride?.estimatedFare ??
     ride?.totalAmount ??
     ride?.amount ??
     0;
 
-  const tripDistance =
+  const tripDistanceKm =
     ride?.distanceKm ??
-    ride?.actualDistance ??
     ride?.distance ??
+    ride?.actualDistance ??
+    ride?.fare?.distanceKm ??
     0;
+
+  const tripDistanceMiles =
+    ride?.distanceMiles ??
+    ride?.fare?.distanceMiles ??
+    null;
+
+  const tripDuration =
+    ride?.durationMinutes ??
+    ride?.duration ??
+    ride?.etaMinutes ??
+    ride?.fare?.durationMinutes ??
+    null;
+
+  const vehicleName =
+    ride?.vehicleType?.name ||
+    ride?.vehicleType?.displayName ||
+    '';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
@@ -126,12 +222,17 @@ export function RideDetailsModal({ rideId, isOpen, onClose }: RideDetailsModalPr
                     ride.status
                   )}`}
                 >
-                  {ride.status}
+                  {formatStatusText(ride.status)}
+                </span>
+              )}
+              {ride?.rideType && (
+                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">
+                  {ride.rideType}
                 </span>
               )}
             </div>
             <p className="text-xs text-gray-500 mt-0.5">
-              ID: <span className="font-mono">{rideId}</span>
+              Ride ID: <span className="font-mono font-medium text-gray-700">{rideId || ride?.rideId || ride?._id}</span>
             </p>
           </div>
 
@@ -144,15 +245,15 @@ export function RideDetailsModal({ rideId, isOpen, onClose }: RideDetailsModalPr
         </div>
 
         {/* Content */}
-        <div className="p-6 overflow-y-auto space-y-6 flex-1">
-          {loading && (
+        <div className="p-6 overflow-y-auto space-y-5 flex-1">
+          {loading && !ride && (
             <div className="py-16 flex flex-col items-center justify-center gap-3">
               <div className="w-10 h-10 border-4 border-orange-200 border-t-[#FF5B26] rounded-full animate-spin" />
               <p className="text-sm font-medium text-gray-500">Fetching trip details...</p>
             </div>
           )}
 
-          {error && (
+          {error && !ride && (
             <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 space-y-3">
               <div className="flex items-center gap-2">
                 <AlertCircle className="w-5 h-5 text-red-500" />
@@ -171,13 +272,20 @@ export function RideDetailsModal({ rideId, isOpen, onClose }: RideDetailsModalPr
             </div>
           )}
 
-          {!loading && !error && ride && (
+          {ride && (
             <>
               {/* Route Path */}
               <div className="p-4 rounded-xl bg-gray-50/80 border border-gray-100 space-y-4">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400">Route</h4>
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400">Route & Key Metrics</h4>
+                  {ride?.routeSource && (
+                    <span className="text-[10px] text-gray-400 font-medium">
+                      via {ride.routeSource.replace(/_/g, ' ')}
+                    </span>
+                  )}
+                </div>
 
-                <div className="space-y-3 relative pl-6 before:absolute before:left-2.5 before:top-3 before:bottom-3 before:w-0.5 before:bg-gray-200">
+                <div className="space-y-3.5 relative pl-6 before:absolute before:left-2.5 before:top-3.5 before:bottom-3.5 before:w-0.5 before:bg-gray-200">
                   <div className="relative">
                     <div className="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full bg-emerald-500 ring-4 ring-emerald-100" />
                     <p className="text-xs text-gray-400 font-medium">Pickup</p>
@@ -191,26 +299,63 @@ export function RideDetailsModal({ rideId, isOpen, onClose }: RideDetailsModalPr
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3 pt-3 border-t border-gray-200/70 text-center">
-                  <div className="bg-white p-2.5 rounded-lg border border-gray-100">
-                    <p className="text-xs text-gray-400">Distance</p>
+                <div className="grid grid-cols-3 gap-2.5 pt-3 border-t border-gray-200/70 text-center">
+                  <div className="bg-white p-2.5 rounded-lg border border-gray-100 shadow-sm">
+                    <p className="text-[11px] text-gray-400">Distance</p>
                     <p className="text-sm font-bold text-gray-800">
-                      {tripDistance} km
+                      {tripDistanceKm} km
+                    </p>
+                    {tripDistanceMiles && (
+                      <p className="text-[10px] text-gray-400">({tripDistanceMiles} mi)</p>
+                    )}
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-gray-100 shadow-sm">
+                    <p className="text-[11px] text-gray-400">Duration</p>
+                    <p className="text-sm font-bold text-gray-800">
+                      {tripDuration ? `${tripDuration} mins` : '-'}
                     </p>
                   </div>
-                  <div className="bg-white p-2.5 rounded-lg border border-gray-100">
-                    <p className="text-xs text-gray-400">Total Fare</p>
+                  <div className="bg-white p-2.5 rounded-lg border border-gray-100 shadow-sm">
+                    <p className="text-[11px] text-gray-400">Total Fare</p>
                     <p className="text-sm font-bold text-emerald-600">
-                      {formatCurrency(fareTotal)}
+                      {formatMoney(fareTotal)}
                     </p>
                   </div>
                 </div>
               </div>
 
+              {/* Vehicle & Passenger Count */}
+              {(vehicleName || ride.passengerCount) && (
+                <div className="p-4 rounded-xl bg-white border border-gray-100 shadow-sm flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-orange-50 text-[#FF5B26] flex items-center justify-center">
+                      <Car className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400 font-medium">Vehicle & Capacity</p>
+                      <p className="text-sm font-bold text-gray-900">{vehicleName || 'Standard'}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {ride.passengerCount && (
+                      <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 font-semibold border border-blue-100">
+                        <Users className="w-3 h-3" />
+                        {ride.passengerCount} {ride.passengerCount > 1 ? 'Passengers' : 'Passenger'}
+                      </span>
+                    )}
+                    {ride.vehicleType?.seats && (
+                      <span className="text-xs px-2.5 py-1 rounded-full bg-orange-50 text-[#FF5B26] font-semibold border border-orange-100">
+                        {ride.vehicleType.seats} Seats
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Passenger Info */}
               <div className="p-4 rounded-xl bg-white border border-gray-100 shadow-sm">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">
-                  Passenger
+                  Passenger Details
                 </h4>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -219,11 +364,11 @@ export function RideDetailsModal({ rideId, isOpen, onClose }: RideDetailsModalPr
                     </div>
                     <div>
                       <p className="text-sm font-bold text-gray-900">{passengerName}</p>
-                      <p className="text-xs text-gray-500">{passengerPhone}</p>
+                      <p className="text-xs text-gray-500">{passengerPhone || 'No contact provided'}</p>
                     </div>
                   </div>
 
-                  {passengerPhone && passengerPhone !== 'Not provided' && (
+                  {passengerPhone && (
                     <a
                       href={`tel:${passengerPhone}`}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-semibold border border-emerald-200 transition-colors"
@@ -235,10 +380,21 @@ export function RideDetailsModal({ rideId, isOpen, onClose }: RideDetailsModalPr
                 </div>
               </div>
 
+              {/* Notes (if provided by passenger) */}
+              {ride.notes && (
+                <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200/80 text-amber-900 shadow-sm space-y-1">
+                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-800">
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>Passenger Notes / Special Instructions</span>
+                  </div>
+                  <p className="text-xs text-amber-950 font-medium">"{ride.notes}"</p>
+                </div>
+              )}
+
               {/* Timing & Timeline */}
               <div className="p-4 rounded-xl bg-white border border-gray-100 shadow-sm space-y-3">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400">
-                  Timestamps
+                  Trip Timeline
                 </h4>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-gray-600">
@@ -266,6 +422,12 @@ export function RideDetailsModal({ rideId, isOpen, onClose }: RideDetailsModalPr
                       <span>Completed: {formatDateTime(ride.completedAt)}</span>
                     </div>
                   )}
+                  {ride.cancelledAt && (
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-500" />
+                      <span>Cancelled: {formatDateTime(ride.cancelledAt)}</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -273,50 +435,79 @@ export function RideDetailsModal({ rideId, isOpen, onClose }: RideDetailsModalPr
               <div className="p-4 rounded-xl bg-white border border-gray-100 shadow-sm space-y-3">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400">
-                    Payment Breakdown
+                    Payment & Fare Breakdown
                   </h4>
-                  <span className="text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-600">
-                    {ride.paymentMethod || 'Cash'} • {ride.paymentStatus || 'Completed'}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-700">
+                      {ride.paymentMethod || 'CASH'}
+                    </span>
+                    <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${
+                      (ride.paymentStatus || '').toUpperCase() === 'PAID'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : 'bg-amber-50 text-amber-700 border border-amber-200'
+                    }`}>
+                      {ride.paymentStatus || 'PENDING'}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="space-y-1.5 text-xs text-gray-600 pt-1">
                   {(ride.fare?.basePrice !== undefined || ride.fareBreakdown?.baseFare !== undefined) && (
                     <div className="flex justify-between">
                       <span>Base Fare</span>
-                      <span className="font-semibold">
-                        {formatCurrency(ride.fare?.basePrice ?? ride.fareBreakdown?.baseFare)}
+                      <span className="font-semibold text-gray-800">
+                        {formatMoney(ride.fare?.basePrice ?? ride.fareBreakdown?.baseFare)}
                       </span>
                     </div>
                   )}
-                  {(ride.fare?.distanceRate !== undefined || ride.fareBreakdown?.distanceFare !== undefined) && (
+                  {(ride.fare?.distanceRate !== undefined || ride.fareBreakdown?.distanceFare !== undefined || ride.fare?.perKmRate !== undefined) && (
                     <div className="flex justify-between">
-                      <span>Distance Fare ({ride.fare?.distanceKm || tripDistance} km)</span>
-                      <span className="font-semibold">
-                        {formatCurrency(ride.fare?.distanceRate ?? ride.fareBreakdown?.distanceFare)}
+                      <span>Distance Fare ({tripDistanceKm} km {ride.fare?.perKmRate ? `@ ${formatMoney(ride.fare.perKmRate)}/km` : ''})</span>
+                      <span className="font-semibold text-gray-800">
+                        {formatMoney(ride.fare?.distanceRate ?? ride.fareBreakdown?.distanceFare ?? (ride.fare?.perKmRate ? ride.fare.perKmRate * tripDistanceKm : 0))}
                       </span>
                     </div>
                   )}
-                  {(ride.fare?.timeRate !== undefined || ride.fareBreakdown?.timeFare !== undefined) && (
+                  {(ride.fare?.timeRate !== undefined || ride.fare?.perMinuteRate !== undefined) && (
                     <div className="flex justify-between">
-                      <span>Time Rate ({ride.fare?.durationMinutes || ride.durationMinutes || 0} min)</span>
-                      <span className="font-semibold">
-                        {formatCurrency(ride.fare?.timeRate ?? ride.fareBreakdown?.timeFare)}
+                      <span>Time Fare ({tripDuration || 0} mins {ride.fare?.perMinuteRate ? `@ ${formatMoney(ride.fare.perMinuteRate)}/min` : ''})</span>
+                      <span className="font-semibold text-gray-800">
+                        {formatMoney(ride.fare?.timeRate ?? (ride.fare?.perMinuteRate && tripDuration ? ride.fare.perMinuteRate * tripDuration : 0))}
                       </span>
                     </div>
                   )}
-                  {(ride.fare?.discount !== undefined || ride.discount !== undefined || ride.fareBreakdown?.discount !== undefined) && (
-                    <div className="flex justify-between text-emerald-600">
-                      <span>Discount</span>
+                  {ride.fare?.subTotal !== undefined && (
+                    <div className="flex justify-between text-gray-500 pt-1 border-t border-gray-100">
+                      <span>Subtotal</span>
+                      <span className="font-semibold text-gray-700">{formatMoney(ride.fare.subTotal)}</span>
+                    </div>
+                  )}
+                  {(ride.fare?.discount !== undefined || ride.discount !== undefined || ride.promoCode) && (
+                    <div className="flex justify-between text-emerald-600 font-medium">
+                      <span className="flex items-center gap-1">
+                        <Tag className="w-3 h-3" />
+                        Discount {ride.promoCode ? `(${ride.promoCode})` : ''}
+                      </span>
                       <span className="font-semibold">
-                        -{formatCurrency(ride.fare?.discount ?? ride.discount ?? ride.fareBreakdown?.discount ?? 0)}
+                        -{formatMoney(ride.fare?.discount ?? ride.discount ?? 0)}
                       </span>
                     </div>
                   )}
-                  <div className="flex justify-between text-sm font-bold text-gray-900 pt-2 border-t border-gray-100">
-                    <span>Total Amount</span>
-                    <span className="text-base text-emerald-600">{formatCurrency(fareTotal)}</span>
+                  {ride.fare?.taxAndFees !== undefined && Number(ride.fare.taxAndFees) > 0 && (
+                    <div className="flex justify-between">
+                      <span>Taxes & Fees</span>
+                      <span className="font-semibold text-gray-800">{formatMoney(ride.fare.taxAndFees)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-sm font-bold text-gray-900 pt-2 border-t border-gray-200">
+                    <span>Payable Fare</span>
+                    <span className="text-base text-emerald-600">{formatMoney(fareTotal)}</span>
                   </div>
+                  {ride.paymentCollectedAt && (
+                    <p className="text-[11px] text-gray-400 text-right pt-0.5">
+                      Collected at: {formatDateTime(ride.paymentCollectedAt)}
+                    </p>
+                  )}
                 </div>
               </div>
             </>
@@ -336,3 +527,4 @@ export function RideDetailsModal({ rideId, isOpen, onClose }: RideDetailsModalPr
     </div>
   );
 }
+

@@ -23,13 +23,20 @@ import { PrivacyPolicyPage } from '@/pages/legal/PrivacyPolicyPage';
 import { TermsPage } from '@/pages/legal/TermsPage';
 import { SettingsPage } from '@/pages/driver/SettingsPage';
 import { AuthProvider } from '@/context/AuthContext';
+import { SocketProvider } from '@/context/SocketContext';
 import { NotificationProvider } from '@/context/NotificationContext';
 
 function App() {
   return (
     <AuthProvider>
-      <NotificationProvider>
-        <BrowserRouter>
+      <SocketProvider>
+        <NotificationProvider>
+          <BrowserRouter
+            future={{
+              v7_startTransition: true,
+              v7_relativeSplatPath: true,
+            }}
+          >
           <Routes>
             <Route element={<PublicLayout />}>
               <Route path="/" element={<HomePage />} />
@@ -66,8 +73,9 @@ function App() {
           </Routes>
         </BrowserRouter>
       </NotificationProvider>
-    </AuthProvider>
-  );
+    </SocketProvider>
+  </AuthProvider>
+);
 }
 
 export default App;

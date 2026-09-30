@@ -48,6 +48,7 @@ export interface FareBreakdown {
 export interface RideRequest {
   _id?: string;
   id?: string;
+  rideId?: string;
   passengerId?: string;
   passenger?: PassengerInfo;
   pickup?: LocationPoint | string;
@@ -96,33 +97,31 @@ export interface DriverLocationPayload {
   accuracy?: number;
 }
 
+export interface AcceptRidePayload {
+  rideId: string;
+}
+
+export interface ArrivedPayload {
+  rideId: string;
+}
+
 export interface StartRidePayload {
-  rideId?: string;
-  id?: string;
+  rideId: string;
   otp?: string;
 }
 
 export interface CompleteRidePayload {
-  rideId?: string;
-  id?: string;
-  actualDistance?: number;
-  fare?: number;
+  rideId: string;
 }
 
 export interface CollectPaymentPayload {
-  rideId?: string;
-  id?: string;
-  amount?: number;
-  totalAmount?: number;
-  paymentMode?: 'CASH' | 'UPI' | 'ONLINE' | string;
-  isCollected?: boolean;
+  rideId: string;
+  paymentMethod: 'CASH' | 'CARD' | 'UPI' | 'ONLINE' | string;
 }
 
 export interface CancelRidePayload {
-  rideId?: string;
-  id?: string;
+  rideId: string;
   reason?: string;
-  cancelledBy?: 'DRIVER' | string;
 }
 
 export interface DriverRideHomeData {

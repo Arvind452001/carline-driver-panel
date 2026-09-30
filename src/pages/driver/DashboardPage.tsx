@@ -13,11 +13,15 @@ import {
   CheckCircle2,
   PlusCircle,
   RefreshCw,
+  Zap,
+  WifiOff,
 } from 'lucide-react';
 
 import { api } from '@/services/api';
 import {
   getDriverRideHome,
+  getDriverRideDashboard,
+  getRideRequests,
   getActiveRide,
   updateDriverDuty,
   updateDriverLocation,
@@ -27,6 +31,8 @@ import { formatCurrency } from '@/utils/formatCurrency';
 import { ActiveRideCard } from '@/components/booking/ActiveRideCard';
 import { RideDetailsModal } from '@/components/booking/RideDetailsModal';
 import { CreateRideModal } from '@/components/booking/CreateRideModal';
+import { useRideSocket } from '@/hooks/useRideSocket';
+import { useSocket } from '@/context/SocketContext';
 import Swal from 'sweetalert2';
 
 export function DashboardPage() {
@@ -35,61 +41,95 @@ export function DashboardPage() {
     return localStorage.getItem('driver_is_online') === 'true';
   });
   const [dutyLoading, setDutyLoading] = useState(false);
-  const [activeRide, setActiveRide] = useState<any>(null);
-  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
+  const [selectedRideData, setSelectedRideData] = useState<any>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   // Watch position ID ref
   const watchIdRef = useRef<number | null>(null);
 
-  // Fetch Dashboard and Live Booking Home Data
+  // Socket management hook
+  const { reconnect } = useSocket();
+  const {
+    isConnected: isSocketConnected,
+    connectionError: socketError,
+    activeRide,
+    setActiveRide,
+    pendingRequests,
+    setPendingRequests,
+    nextAction,
+    setNextAction,
+    emitLocation,
+  } = useRideSocket({
+    onTripCompleted: () => {
+      loadDashboardData(true);
+    },
+    onTripPayment: () => {
+      loadDashboardData(true);
+    },
+  });
+
+  // Fetch Dashboard and Live Booking Home Data (Initial / periodic load over HTTP)
   const loadDashboardData = useCallback(async (showIndicator = false) => {
     if (showIndicator) setRefreshing(true);
     try {
-      // Fetch mock fallback & live ride home & active ride
-      const [mockRes, homeRes, activeRes] = await Promise.allSettled([
+      // Fetch mock fallback, driver dashboard, live ride home, active ride, and pending requests
+      const [mockRes, dashRes, homeRes, activeRes, reqsRes] = await Promise.allSettled([
         api.getDashboardData(),
+        getDriverRideDashboard(),
         getDriverRideHome(),
         getActiveRide(),
+        getRideRequests(),
       ]);
 
       const mockData: any = mockRes.status === 'fulfilled' ? mockRes.value : {};
+      const dashData: any = dashRes.status === 'fulfilled' ? dashRes.value : null;
       const homeData: any = homeRes.status === 'fulfilled' ? homeRes.value : null;
       const activeData: any = activeRes.status === 'fulfilled' ? activeRes.value : null;
+      const reqsData: any = reqsRes.status === 'fulfilled' ? reqsRes.value : [];
 
-      // Merge real ride home stats with mock fallbacks
+      // Merge real ride home & dashboard stats with mock fallbacks
       const homeStats = homeData?.stats;
-      const homeDuty = homeData?.duty || homeData?.driver;
+      const dashToday = dashData?.today;
+      const homeDuty = dashData?.duty || homeData?.duty || homeData?.driver;
 
       const merged = {
         todayEarnings:
+          dashToday?.earnings ??
           homeStats?.totalEarned ??
           homeData?.todayEarnings ??
           homeData?.totalEarnings ??
           mockData?.todayEarnings ??
           0,
         trips:
+          dashToday?.trips ??
           homeStats?.totalTrips ??
           homeData?.todayTrips ??
           homeData?.totalTrips ??
           mockData?.trips ??
           0,
         onlineHours:
+          dashToday?.onlineDurationText ??
           homeData?.onlineHours ??
           mockData?.onlineHours ??
           '0h 0m',
         rating:
+          dashToday?.rating ??
+          dashData?.rating ??
           homeStats?.rating ??
           homeData?.rating ??
           mockData?.rating ??
           4.9,
         transactions:
+          dashToday?.trips ??
           homeStats?.totalTrips ??
           mockData?.transactions ??
           0,
         cashCollected: homeData?.cashCollected ?? 0,
+        greeting: dashData?.greeting,
+        activeVehicle: dashData?.activeVehicle,
+        performance: dashData?.performance,
       };
 
       setData(merged);
@@ -101,42 +141,56 @@ export function DashboardPage() {
         localStorage.setItem('driver_is_online', String(backendOnline));
       }
 
-      // Active Ride
+      // Active Ride (Populate if present)
       if (activeData) {
         setActiveRide(activeData);
+      } else if (dashData?.activeRide) {
+        setActiveRide(dashData.activeRide);
       } else if (homeData?.activeRide) {
         setActiveRide(homeData.activeRide);
       } else {
-        setActiveRide(null);
+        // If a ride is completed and waiting for payment collection, preserve it
+        setActiveRide((prev) => {
+          if (!prev) return null;
+          const statusUpper = (prev.status || '').toUpperCase();
+          const paymentUpper = (prev.paymentStatus || '').toUpperCase();
+          if (
+            (statusUpper === 'COMPLETED' || statusUpper === 'RIDE_COMPLETED' || statusUpper === 'PAYMENT_PENDING') &&
+            paymentUpper !== 'PAID'
+          ) {
+            return prev;
+          }
+          return null;
+        });
       }
 
-      // Pending requests
-      if (Array.isArray(homeData?.pendingRequests)) {
+      // Pending requests (Populate if present)
+      if (Array.isArray(reqsData) && reqsData.length > 0) {
+        setPendingRequests(reqsData);
+      } else if (Array.isArray(homeData?.pendingRequests)) {
         setPendingRequests(homeData.pendingRequests);
       } else if (Array.isArray(homeData?.requests)) {
         setPendingRequests(homeData.requests);
-      } else {
-        setPendingRequests([]);
       }
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
     } finally {
       if (showIndicator) setRefreshing(false);
     }
-  }, []);
+  }, [setActiveRide, setNextAction, setPendingRequests]);
 
   useEffect(() => {
     loadDashboardData();
 
-    // Auto-refresh active ride status every 25 seconds
+    // Periodic sync
     const interval = setInterval(() => {
       loadDashboardData();
-    }, 25000);
+    }, 30000);
 
     return () => clearInterval(interval);
   }, [loadDashboardData]);
 
-  // Handle Driver Location Geolocation Updates when Online
+  // Handle Driver Location Updates via Socket and HTTP when Online (every 5-10s)
   useEffect(() => {
     if (!isOnline) {
       if (watchIdRef.current !== null) {
@@ -148,45 +202,64 @@ export function DashboardPage() {
 
     if (!('geolocation' in navigator)) return;
 
+    const pushLocation = (pos: GeolocationPosition) => {
+      try {
+        const coords = {
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          heading: pos.coords.heading ?? undefined,
+          speed: pos.coords.speed ?? undefined,
+        };
+        // Emit via real-time socket
+        emitLocation(coords);
+        // Also sync via REST API
+        updateDriverLocation(coords).catch((e) => {
+          console.warn('REST location sync error:', e);
+        });
+      } catch (e) {
+        console.warn('Driver location update error:', e);
+      }
+    };
+
     // Send an immediate position
     navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        try {
-          await updateDriverLocation({
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-          });
-        } catch (e) {
-          console.warn('Driver location initial update:', e);
+      pushLocation,
+      (err) => {
+        if (err.code !== err.PERMISSION_DENIED) {
+          console.warn('Geolocation error:', err.message);
         }
       },
-      (err) => console.warn('Geolocation error:', err.message),
       { enableHighAccuracy: true, timeout: 10000 }
     );
 
-    // Watch position
+    // Watch position & emit location live
     watchIdRef.current = navigator.geolocation.watchPosition(
-      async (pos) => {
-        try {
-          await updateDriverLocation({
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-          });
-        } catch (e) {
-          console.warn('Driver location watch update:', e);
+      pushLocation,
+      (err) => {
+        if (err.code !== err.PERMISSION_DENIED) {
+          console.warn('Geolocation watch error:', err.message);
         }
       },
-      (err) => console.warn('Geolocation watch error:', err.message),
-      { enableHighAccuracy: true, maximumAge: 30000, timeout: 20000 }
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
     );
 
+    // Periodic heartbeat every 8 seconds while online to guarantee regular updates
+    const heartbeatInterval = setInterval(() => {
+      navigator.geolocation.getCurrentPosition(
+        pushLocation,
+        () => {},
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    }, 8000);
+
     return () => {
+      clearInterval(heartbeatInterval);
       if (watchIdRef.current !== null) {
         navigator.geolocation?.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
     };
-  }, [isOnline]);
+  }, [isOnline, emitLocation]);
 
   // Handle Duty Toggle (Go Online / Go Offline)
   const handleToggleDuty = async () => {
@@ -205,7 +278,7 @@ export function DashboardPage() {
         icon: 'success',
         title: nextStatus ? 'You are now Online!' : 'You are now Offline',
         text: nextStatus
-          ? 'You can now receive incoming ride requests.'
+          ? 'You can now receive incoming ride requests in real time.'
           : 'You will not receive any ride requests while offline.',
         confirmButtonColor: '#FF5B26',
         timer: 2000,
@@ -304,10 +377,15 @@ export function DashboardPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
             <span className="text-sm font-medium text-primary-500">
-              Welcome back 👋
+              {data?.greeting?.text || 'Welcome back 👋'}
             </span>
+            {data?.activeVehicle && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-gray-100 text-gray-700 border border-gray-200">
+                🚗 {data.activeVehicle.displayName || data.activeVehicle.name} {data.activeVehicle.registrationNumber ? `• ${data.activeVehicle.registrationNumber}` : ''}
+              </span>
+            )}
             <span
               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${
                 isOnline
@@ -322,6 +400,26 @@ export function DashboardPage() {
               />
               {isOnline ? 'Duty Online' : 'Duty Offline'}
             </span>
+
+            {/* Socket Live Connection Indicator */}
+            {isSocketConnected ? (
+              <span
+                title="Real-time ride socket is connected"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60"
+              >
+                <Zap className="w-3 h-3 text-emerald-500 animate-bounce" />
+                <span>Socket Live</span>
+              </span>
+            ) : (
+              <button
+                onClick={() => reconnect()}
+                title={socketError || 'Click to reconnect socket'}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors"
+              >
+                <WifiOff className="w-3 h-3 text-amber-600" />
+                <span>Reconnect Socket</span>
+              </button>
+            )}
           </div>
 
           <h2 className="text-2xl sm:text-3xl font-bold text-navy tracking-tight">
@@ -398,8 +496,16 @@ export function DashboardPage() {
       <ActiveRideCard
         ride={activeRide}
         pendingRequests={pendingRequests}
+        nextAction={nextAction}
         onRefresh={() => loadDashboardData(true)}
-        onViewDetails={(id) => setSelectedRideId(id)}
+        onViewDetails={(id, rideData) => {
+          setSelectedRideId(id);
+          setSelectedRideData(
+            rideData ||
+            pendingRequests.find((r) => (r.rideId || (r as any)._id || (r as any).id) === id) ||
+            (activeRide?.rideId === id || (activeRide as any)?._id === id || activeRide?.id === id ? activeRide : null)
+          );
+        }}
       />
 
       {/* Stats */}
@@ -685,8 +791,12 @@ export function DashboardPage() {
       {/* Ride Details Modal */}
       <RideDetailsModal
         rideId={selectedRideId}
+        initialData={selectedRideData}
         isOpen={Boolean(selectedRideId)}
-        onClose={() => setSelectedRideId(null)}
+        onClose={() => {
+          setSelectedRideId(null);
+          setSelectedRideData(null);
+        }}
       />
 
       {/* Create Ride Modal for Testing */}

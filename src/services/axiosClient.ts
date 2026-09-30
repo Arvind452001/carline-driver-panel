@@ -29,7 +29,9 @@ axiosInstance.interceptors.request.use(
       delete config.headers['Content-Type'];
     }
 
-    const token = localStorage.getItem('accessToken');
+    const token =
+      localStorage.getItem('accessToken') ||
+      localStorage.getItem('token');
 
     if (token) {
       config.headers.Authorization = token.startsWith('Bearer ')
