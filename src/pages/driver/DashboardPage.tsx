@@ -383,7 +383,7 @@ export function DashboardPage() {
             </span>
             {data?.activeVehicle && (
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-gray-100 text-gray-700 border border-gray-200">
-                🚗 {data.activeVehicle.displayName || data.activeVehicle.name} {data.activeVehicle.registrationNumber ? `• ${data.activeVehicle.registrationNumber}` : ''}
+                {data.activeVehicle.displayName || data.activeVehicle.name} {data.activeVehicle.registrationNumber ? `• ${data.activeVehicle.registrationNumber}` : ''}
               </span>
             )}
             <span

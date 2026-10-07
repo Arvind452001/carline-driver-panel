@@ -108,7 +108,7 @@ export function ActiveRideCard({
 
     const { value: otp, isConfirmed } = await Swal.fire({
       title: 'Enter Start OTP',
-      text: 'Ask the passenger for their 4-digit ride OTP (optional if not provided):',
+      text: 'Ask the passenger for their 6-digit ride OTP (optional if not provided):',
       input: 'text',
       inputPlaceholder: 'e.g. 1234',
       showCancelButton: true,
@@ -388,7 +388,7 @@ export function ActiveRideCard({
                         </span>
                         {vehicleInfo && (
                           <span className="text-[11px] font-semibold bg-black/20 px-2 py-0.5 rounded-full">
-                            🚗 {vehicleInfo}
+                            {vehicleInfo}
                           </span>
                         )}
                         <span className="text-xs font-mono opacity-80">#{reqId?.slice(-6)}</span>

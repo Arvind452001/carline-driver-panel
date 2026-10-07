@@ -132,9 +132,10 @@ export function PublicNavbar() {
             <Link
               to="/signup"
               onClick={() => setMobileOpen(false)}
-              className="w-full text-center py-2.5 bg-[#FF5B26] text-white font-bold rounded-full shadow-md text-sm"
+              className="w-full text-center py-2.5 bg-[#FF5B26] text-white font-bold rounded-full shadow-md text-sm inline-flex items-center justify-center gap-1.5"
             >
-              Apply Now ➔
+              <span>Apply Now</span>
+              <ArrowUpRight className="w-4 h-4" />
             </Link>
           </div>
         </div>

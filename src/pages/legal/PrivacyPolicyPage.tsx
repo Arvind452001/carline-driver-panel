@@ -163,7 +163,7 @@ export function PrivacyPolicyPage() {
     'September 29, 2026';
 
   return (
-    <div className="min-h-screen bg-slate-50/60 pb-16 pt-6">
+    <div className="min-h-screen bg-slate-50/60 pb-16 pt-24">
       {/* Top Banner Header */}
       <div className="max-w-5xl mx-auto px-4 sm:px-6">
         {/* Navigation & Actions Bar */}

@@ -29,7 +29,7 @@ export function DriverHeader({
           </button>
           <div>
             <h2 className="text-base sm:text-lg font-bold text-gray-900 leading-snug">
-              Good Day, {userName} 👋
+              Good Day, {userName}
             </h2>
             <div className="flex items-center gap-2 mt-0.5">
               <span

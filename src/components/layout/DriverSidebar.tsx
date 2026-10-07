@@ -147,20 +147,6 @@ export function DriverSidebar({ isOpen, onClose }: SidebarProps) {
 
         {/* Legal & Logout */}
         <div className="border-t border-gray-100 pt-3 space-y-1">
-          <NavLink
-            to="/privacy-policy"
-            onClick={onClose}
-            className="flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-medium text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-colors"
-          >
-            <span>Privacy Policy</span>
-          </NavLink>
-          <NavLink
-            to="/terms"
-            onClick={onClose}
-            className="flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-medium text-gray-500 hover:text-gray-800 hover:bg-gray-50 transition-colors"
-          >
-            <span>Terms & Conditions</span>
-          </NavLink>
           <button
             onClick={handleLogout}
             className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-rose-600 hover:bg-rose-50 transition-colors"
