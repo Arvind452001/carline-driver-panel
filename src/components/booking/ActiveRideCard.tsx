@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   MapPin,
   Navigation,
@@ -10,12 +10,22 @@ import {
   CreditCard,
   XCircle,
   BellRing,
+  Clock,
+  Hourglass,
+  RefreshCw,
+  Info,
+  Flag,
+  MessageSquare,
 } from 'lucide-react';
 import {
   acceptRideRequest,
+  rejectRideRequest,
   markDriverArrived,
+  getRideWaitingTime,
   startRide,
+  markDestinationReached,
   completeRide,
+  getFinalFare,
   collectRidePayment,
   cancelRide,
 } from '@/services/DriverBooking';
@@ -23,6 +33,9 @@ import { getErrorMessage } from '@/services/axiosClient';
 import { formatCurrency } from '@/utils/formatCurrency';
 import Swal from 'sweetalert2';
 import type { NextActionType } from '@/types/socket';
+import type { WaitingStatusResponse, FinalFareResponse } from '@/types/booking';
+import { RideChatModal } from '@/components/chat/RideChatModal';
+import { useRideChat } from '@/hooks/useRideChat';
 
 interface ActiveRideCardProps {
   ride: any;
@@ -30,6 +43,7 @@ interface ActiveRideCardProps {
   nextAction?: NextActionType;
   onRefresh: () => void;
   onViewDetails: (rideId: string, data?: any) => void;
+  onRemovePendingRequest?: (rideId: string) => void;
 }
 
 export function ActiveRideCard({
@@ -38,20 +52,192 @@ export function ActiveRideCard({
   nextAction,
   onRefresh,
   onViewDetails,
+  onRemovePendingRequest,
 }: ActiveRideCardProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
+  // In-Ride Chat modal state
+  const [isChatOpen, setIsChatOpen] = useState(false);
+
+  // Waiting time tracking and delay fare calculation state
+  const [waitingData, setWaitingData] = useState<WaitingStatusResponse | null>(null);
+  const [elapsedWaitingSeconds, setElapsedWaitingSeconds] = useState<number>(0);
+  const [isSyncingWaiting, setIsSyncingWaiting] = useState(false);
+  const arrivalTimestampRef = useRef<number | null>(null);
+
   // Helper to extract ride ID
-  const getRideId = (r: any) => r?.rideId || r?._id || r?.id;
+  const getRideId = (r: any) =>
+    r?.rideId || r?._id || r?.id || r?.tripId || r?.requestId || r?.bookingId || '';
+
+  const rawStatus = (ride?.status || '').toUpperCase();
+  const isWaitingStatus = rawStatus === 'ARRIVED' || rawStatus === 'DRIVER_ARRIVED';
+  const currentRideId = getRideId(ride);
+
+  // In-Ride Chat hook integration
+  const {
+    messages: chatMessages,
+    unreadCount: unreadChatCount,
+    isPassengerTyping: isChatPassengerTyping,
+    loading: chatLoading,
+    sending: chatSending,
+    sendMessage: handleSendChatMessage,
+    sendTyping: handleSendChatTyping,
+    markAsRead: handleMarkChatAsRead,
+  } = useRideChat({
+    rideId: currentRideId || null,
+    isOpen: isChatOpen,
+    onNewIncomingMessage: (incoming) => {
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'info',
+        title: `Message from ${incoming.senderName || 'Customer'}`,
+        text: incoming.message,
+        showConfirmButton: true,
+        confirmButtonText: 'Reply',
+        confirmButtonColor: '#FF5B26',
+        timer: 6000,
+      }).then((res) => {
+        if (res.isConfirmed) {
+          setIsChatOpen(true);
+        }
+      });
+    },
+  });
+
+  // Poll waiting status and calculate delay in real-time
+  useEffect(() => {
+    if (!isWaitingStatus || !currentRideId) {
+      setWaitingData(null);
+      setElapsedWaitingSeconds(0);
+      arrivalTimestampRef.current = null;
+      return;
+    }
+
+    // Determine initial arrival time
+    const arrivedAtStr = ride?.arrivedAt || ride?.driverArrivedAt;
+    const initialArrivalMs = arrivedAtStr ? new Date(arrivedAtStr).getTime() : Date.now();
+    if (!arrivalTimestampRef.current) {
+      arrivalTimestampRef.current = isNaN(initialArrivalMs) ? Date.now() : initialArrivalMs;
+    }
+
+    // Fetch waiting status from backend API
+    const fetchWaiting = async () => {
+      try {
+        setIsSyncingWaiting(true);
+        const data = await getRideWaitingTime(currentRideId);
+        if (data) {
+          setWaitingData(data);
+          if (typeof data.waitingSeconds === 'number') {
+            setElapsedWaitingSeconds(data.waitingSeconds);
+            arrivalTimestampRef.current = Date.now() - data.waitingSeconds * 1000;
+          } else if (typeof data.waitingMinutes === 'number') {
+            setElapsedWaitingSeconds(Math.round(data.waitingMinutes * 60));
+            arrivalTimestampRef.current = Date.now() - Math.round(data.waitingMinutes * 60 * 1000);
+          }
+        }
+      } catch (err) {
+        console.warn('[ActiveRideCard] Failed to fetch waiting status:', err);
+      } finally {
+        setIsSyncingWaiting(false);
+      }
+    };
+
+    fetchWaiting();
+
+    // 1-second interval to tick timer smoothly
+    const timer = setInterval(() => {
+      if (arrivalTimestampRef.current) {
+        const secs = Math.max(0, Math.floor((Date.now() - arrivalTimestampRef.current) / 1000));
+        setElapsedWaitingSeconds(secs);
+      }
+    }, 1000);
+
+    // Poll backend waiting API every 15s
+    const pollInterval = setInterval(() => {
+      fetchWaiting();
+    }, 15000);
+
+    return () => {
+      clearInterval(timer);
+      clearInterval(pollInterval);
+    };
+  }, [isWaitingStatus, currentRideId, ride?.arrivedAt, ride?.driverArrivedAt]);
+
+  // Derived waiting calculations
+  const gracePeriodSeconds =
+    (typeof waitingData?.gracePeriodSeconds === 'number'
+      ? waitingData.gracePeriodSeconds
+      : typeof waitingData?.gracePeriodMinutes === 'number'
+      ? waitingData.gracePeriodMinutes * 60
+      : (ride?.gracePeriodMinutes ?? 3) * 60) || 180;
+
+  const remainingGraceSeconds = Math.max(0, gracePeriodSeconds - elapsedWaitingSeconds);
+  const isGraceExpired = elapsedWaitingSeconds > gracePeriodSeconds;
+  const delaySeconds = Math.max(0, elapsedWaitingSeconds - gracePeriodSeconds);
+  const delayMinutes = Math.ceil(delaySeconds / 60);
+
+  const perMinuteRate =
+    waitingData?.perMinuteWaitingRate ??
+    waitingData?.ratePerMinute ??
+    ride?.waitingRatePerMin ??
+    ride?.fare?.perMinuteWaitingRate ??
+    ride?.perMinuteWaitingFee ??
+    3;
+
+  // Accrued waiting charges from server or calculated live
+  const calculatedWaitingCharges =
+    waitingData?.accruedWaitingCharges ??
+    waitingData?.waitingCharge ??
+    waitingData?.waitingCharges ??
+    (isGraceExpired ? delayMinutes * perMinuteRate : 0);
+
+  const baseFareAmount =
+    ride?.payableFare ??
+    ride?.totalFare ??
+    (typeof ride?.fare === 'number' ? ride.fare : (ride?.fare?.payableFare ?? ride?.fare?.totalFare)) ??
+    ride?.estimatedFare ??
+    ride?.amount ??
+    0;
+
+  const dynamicTotalFare =
+    waitingData?.totalUpdatedFare ??
+    (baseFareAmount + calculatedWaitingCharges);
+
+  const formatTimer = (totalSec: number) => {
+    const mins = Math.floor(totalSec / 60);
+    const secs = totalSec % 60;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
 
   // 1. Accept Ride Request
   const handleAcceptRequest = async (request: any) => {
     const id = getRideId(request);
+    if (!id) return;
     setActionLoading(`accept-${id}`);
     try {
-      await acceptRideRequest({
-        rideId: id,
-      });
+      try {
+        await acceptRideRequest({
+          rideId: id,
+        });
+      } catch (acceptErr: any) {
+        const errMsg = getErrorMessage(acceptErr).toLowerCase();
+        if (
+          errMsg.includes('already assigned') ||
+          errMsg.includes('already accepted') ||
+          errMsg.includes('driver_assigned') ||
+          errMsg.includes('already in progress') ||
+          errMsg.includes('not in searching')
+        ) {
+          console.warn('[ActiveRideCard] Ride already assigned on server:', errMsg);
+        } else {
+          throw acceptErr;
+        }
+      }
+
+      // Remove from pending UI list immediately
+      onRemovePendingRequest?.(id);
+
       Swal.fire({
         icon: 'success',
         title: 'Ride Accepted!',
@@ -73,7 +259,41 @@ export function ActiveRideCard({
     }
   };
 
-  // 2. Mark Arrived
+  // 1b. Reject / Decline Ride Request
+  const handleRejectRequest = async (request: any) => {
+    const id = getRideId(request);
+    if (!id) return;
+    setActionLoading(`reject-${id}`);
+    try {
+      await rejectRideRequest({
+        rideId: id,
+      });
+
+      // Remove from pending list immediately
+      onRemovePendingRequest?.(id);
+
+      Swal.fire({
+        icon: 'info',
+        title: 'Ride Request Declined',
+        text: 'Request transferred to another nearby driver.',
+        confirmButtonColor: '#FF5B26',
+        timer: 1800,
+        showConfirmButton: false,
+      });
+      onRefresh();
+    } catch (err) {
+      Swal.fire({
+        icon: 'error',
+        title: 'Could Not Decline Ride',
+        text: getErrorMessage(err),
+        confirmButtonColor: '#FF5B26',
+      });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // 2. Mark Arrived (Driver reaches pickup point & begins waiting for passenger)
   const handleMarkArrived = async (rideToUpdate: any) => {
     const id = getRideId(rideToUpdate);
     setActionLoading('arrived');
@@ -81,12 +301,21 @@ export function ActiveRideCard({
       await markDriverArrived({
         rideId: id,
       });
+
+      arrivalTimestampRef.current = Date.now();
+      setElapsedWaitingSeconds(0);
+
+      // Trigger instant check of waiting status
+      getRideWaitingTime(id).then((w) => {
+        if (w) setWaitingData(w);
+      });
+
       Swal.fire({
         icon: 'success',
         title: 'Arrived at Pickup!',
-        text: 'The passenger has been notified of your arrival.',
+        text: 'The passenger has been notified of your arrival. Waiting timer has started.',
         confirmButtonColor: '#FF5B26',
-        timer: 2000,
+        timer: 2200,
         showConfirmButton: false,
       });
       onRefresh();
@@ -152,6 +381,46 @@ export function ActiveRideCard({
     }
   };
 
+  // 3b. Mark Destination Reached (calculates final fare and prepares trip completion)
+  const handleDestinationReached = async (rideToUpdate: any) => {
+    const id = getRideId(rideToUpdate);
+    setActionLoading('destination-reached');
+    try {
+      await markDestinationReached({
+        rideId: id,
+      });
+
+      let fareText = '';
+      try {
+        const finalFare = await getFinalFare(id);
+        if (finalFare?.payableFare) {
+          fareText = ` Final calculated fare: ${formatCurrency(finalFare.payableFare)}.`;
+        }
+      } catch {
+        // ignore
+      }
+
+      Swal.fire({
+        icon: 'success',
+        title: 'Destination Reached!',
+        text: `Dropoff location reached.${fareText} Ready for completion.`,
+        confirmButtonColor: '#FF5B26',
+        timer: 2500,
+        showConfirmButton: false,
+      });
+      onRefresh();
+    } catch (err) {
+      Swal.fire({
+        icon: 'error',
+        title: 'Update Failed',
+        text: getErrorMessage(err),
+        confirmButtonColor: '#FF5B26',
+      });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   // 4. Complete Ride
   const handleCompleteRide = async (rideToUpdate: any) => {
     const id = getRideId(rideToUpdate);
@@ -199,16 +468,62 @@ export function ActiveRideCard({
     }
   };
 
-  // 5. Collect Payment
+  // 5. Collect Payment (Fetches final-fare with waiting charges breakdown)
   const handleCollectPayment = async (rideToUpdate: any) => {
     const id = getRideId(rideToUpdate);
+
+    setActionLoading('payment-prep');
+    let finalFareData: FinalFareResponse | null = null;
+    try {
+      finalFareData = await getFinalFare(id);
+    } catch {
+      finalFareData = null;
+    } finally {
+      setActionLoading(null);
+    }
+
+    const waitingCharges =
+      finalFareData?.waitingCharges ??
+      finalFareData?.waitingCharge ??
+      rideToUpdate?.waitingCharge ??
+      0;
+
     const fareAmount =
-      rideToUpdate.fare || rideToUpdate.amount || rideToUpdate.totalAmount || 0;
+      finalFareData?.payableFare ??
+      finalFareData?.totalFare ??
+      finalFareData?.total ??
+      rideToUpdate.payableFare ??
+      rideToUpdate.totalFare ??
+      rideToUpdate.fare ??
+      rideToUpdate.amount ??
+      0;
+
+    const baseFare = fareAmount > waitingCharges ? fareAmount - waitingCharges : fareAmount;
+
+    const waitingSnippet = waitingCharges > 0
+      ? `
+        <div class="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs space-y-1 mb-3 text-left">
+          <div class="flex justify-between text-gray-600">
+            <span>Base / Trip Fare:</span>
+            <span class="font-semibold">${formatCurrency(baseFare)}</span>
+          </div>
+          <div class="flex justify-between text-amber-800 font-bold">
+            <span>Accrued Waiting Delay Charges:</span>
+            <span>+${formatCurrency(waitingCharges)}</span>
+          </div>
+          <div class="border-t border-amber-200 pt-1 flex justify-between font-extrabold text-gray-900">
+            <span>Total Payable Fare:</span>
+            <span class="text-emerald-600">${formatCurrency(fareAmount)}</span>
+          </div>
+        </div>
+      `
+      : '';
 
     const { value: paymentForm, isConfirmed } = await Swal.fire({
       title: 'Collect Ride Payment',
       html: `
         <div class="text-left space-y-3 py-2 text-sm text-gray-700">
+          ${waitingSnippet}
           <div>
             <label class="block font-semibold mb-1">Amount to Collect:</label>
             <input id="swal-amount" class="w-full px-3 py-2 border rounded-lg" type="number" value="${fareAmount}" />
@@ -252,14 +567,14 @@ export function ActiveRideCard({
         timer: 2000,
         showConfirmButton: false,
       });
-      window.location.reload();
+      onRefresh();
     } catch (err: any) {
       const errMsg = getErrorMessage(err);
       if (
         errMsg.toLowerCase().includes('already complete') ||
         errMsg.toLowerCase().includes('already collected')
       ) {
-        window.location.reload();
+        onRefresh();
         return;
       }
       Swal.fire({
@@ -331,15 +646,34 @@ export function ActiveRideCard({
     onViewDetails(id, request);
   };
 
-  // Render pending ride requests banner
-  const hasPending = pendingRequests && pendingRequests.length > 0;
+  // Render pending ride requests banner (filter out any ride that is currently active or already accepted)
+  const currentActiveId = getRideId(ride);
+  const activePendingList = (pendingRequests || []).filter((req) => {
+    const reqId = getRideId(req);
+    if (!reqId) return false;
+    if (currentActiveId && reqId === currentActiveId) return false;
+    const reqStatus = (req?.status || '').toUpperCase();
+    if (
+      reqStatus === 'ACCEPTED' ||
+      reqStatus === 'DRIVER_ASSIGNED' ||
+      reqStatus === 'ARRIVED' ||
+      reqStatus === 'STARTED' ||
+      reqStatus === 'IN_PROGRESS' ||
+      reqStatus === 'COMPLETED'
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  const hasPending = activePendingList.length > 0;
 
   return (
     <div className="space-y-4">
       {/* Pending Incoming Ride Requests */}
       {hasPending && (
         <div className="space-y-3">
-          {pendingRequests.map((req) => {
+          {activePendingList.map((req) => {
             const reqId = getRideId(req);
             const pPickup =
               typeof req.pickup === 'string'
@@ -418,10 +752,11 @@ export function ActiveRideCard({
                       Inspect
                     </button>
                     <button
-                      onClick={() => handleCancelRide(req)}
+                      onClick={() => handleRejectRequest(req)}
+                      disabled={actionLoading === `reject-${reqId}`}
                       className="px-3.5 py-2 rounded-xl bg-black/25 hover:bg-black/35 text-xs font-semibold backdrop-blur-sm transition-colors"
                     >
-                      Decline
+                      {actionLoading === `reject-${reqId}` ? 'Declining...' : 'Decline'}
                     </button>
                     <button
                       onClick={() => handleAcceptRequest(req)}
@@ -484,6 +819,19 @@ export function ActiveRideCard({
 
             <div className="flex items-center gap-2">
               <button
+                onClick={() => setIsChatOpen(true)}
+                className="relative inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-orange-200 bg-orange-50 hover:bg-orange-100 text-xs font-bold text-[#FF5B26] transition-colors shadow-2xs"
+                title="Chat with Customer"
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span>Chat</span>
+                {unreadChatCount > 0 && (
+                  <span className="min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-extrabold flex items-center justify-center animate-bounce shadow-xs">
+                    {unreadChatCount}
+                  </span>
+                )}
+              </button>
+              <button
                 onClick={() => onViewDetails(getRideId(ride), ride)}
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
               >
@@ -516,14 +864,31 @@ export function ActiveRideCard({
                   </p>
                 </div>
               </div>
-              {(ride.passenger?.phoneNumber || ride.passenger?.phone || ride.phoneNumber) && (
-                <a
-                  href={`tel:${ride.passenger?.phoneNumber || ride.passenger?.phone || ride.phoneNumber}`}
-                  className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center hover:bg-emerald-100 transition-colors"
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsChatOpen(true)}
+                  className="relative w-8 h-8 rounded-full bg-orange-50 text-[#FF5B26] hover:bg-orange-100 flex items-center justify-center transition-colors shadow-2xs"
+                  title="Chat with Customer"
                 >
-                  <Phone className="w-4 h-4" />
-                </a>
-              )}
+                  <MessageSquare className="w-4 h-4" />
+                  {unreadChatCount > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-extrabold flex items-center justify-center ring-2 ring-white animate-bounce shadow-xs">
+                      {unreadChatCount}
+                    </span>
+                  )}
+                </button>
+
+                {(ride.passenger?.phoneNumber || ride.passenger?.phone || ride.phoneNumber) && (
+                  <a
+                    href={`tel:${ride.passenger?.phoneNumber || ride.passenger?.phone || ride.phoneNumber}`}
+                    className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center hover:bg-emerald-100 transition-colors shadow-2xs"
+                    title="Call Customer"
+                  >
+                    <Phone className="w-4 h-4" />
+                  </a>
+                )}
+              </div>
             </div>
 
             {/* Estimated Fare */}
@@ -590,6 +955,127 @@ export function ActiveRideCard({
             </div>
           </div>
 
+          {/* Live Waiting Time & Delay Fare Calculation Box (Customer pickup waiting status & accrued charges) */}
+          {isWaitingStatus && (
+            <div className="mt-4 p-4 rounded-2xl bg-gradient-to-br from-amber-50 via-orange-50/60 to-amber-100/40 border border-orange-200/90 shadow-sm space-y-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-orange-500/10 text-[#FF5B26] flex items-center justify-center shrink-0">
+                    <Hourglass className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-orange-700">
+                      Waiting for Rider at Pickup
+                    </span>
+                    <h4 className="text-sm font-extrabold text-gray-900 flex items-center gap-2">
+                      <span>Pickup Wait Timer</span>
+                      <span className="font-mono text-xs px-2 py-0.5 rounded-md bg-white border border-orange-300 text-[#FF5B26] font-bold shadow-2xs">
+                        {formatTimer(elapsedWaitingSeconds)}
+                      </span>
+                    </h4>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => {
+                    if (currentRideId) {
+                      setIsSyncingWaiting(true);
+                      getRideWaitingTime(currentRideId)
+                        .then((d) => d && setWaitingData(d))
+                        .finally(() => setIsSyncingWaiting(false));
+                    }
+                  }}
+                  disabled={isSyncingWaiting}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-orange-50 text-xs font-semibold text-gray-700 border border-orange-200 transition-colors shadow-2xs"
+                  title="Sync waiting fare with server"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 text-[#FF5B26] ${isSyncingWaiting ? 'animate-spin' : ''}`} />
+                  <span>Sync Fare</span>
+                </button>
+              </div>
+
+              {/* Grace Period & Waiting Rate Status Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                <div className={`p-3 rounded-xl border ${
+                  !isGraceExpired
+                    ? 'bg-emerald-50/90 border-emerald-200/90 text-emerald-900'
+                    : 'bg-amber-100/80 border-amber-300/90 text-amber-950'
+                }`}>
+                  <div className="flex items-center justify-between font-bold">
+                    <span className="flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5" />
+                      Free Grace Window:
+                    </span>
+                    <span>
+                      {!isGraceExpired ? (
+                        <span className="text-emerald-700 font-extrabold">{formatTimer(remainingGraceSeconds)} free</span>
+                      ) : (
+                        <span className="text-rose-600 font-extrabold">Expired (+{delayMinutes}m delay)</span>
+                      )}
+                    </span>
+                  </div>
+                  <p className="text-[11px] opacity-80 mt-1">
+                    {!isGraceExpired
+                      ? `Complimentary ${Math.round(gracePeriodSeconds / 60)}-minute boarding period active.`
+                      : `Grace window finished. Accruing delay surcharge.`}
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-white border border-orange-200/80 text-gray-800">
+                  <div className="flex items-center justify-between font-bold">
+                    <span className="flex items-center gap-1.5 text-gray-600">
+                      <DollarSign className="w-3.5 h-3.5 text-orange-500" />
+                      Delay Surcharge Rate:
+                    </span>
+                    <span className="text-gray-900 font-extrabold">
+                      {formatCurrency(perMinuteRate)}/min
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Added to final fare for each minute of pickup delay.
+                  </p>
+                </div>
+              </div>
+
+              {/* Live Fare Breakdown */}
+              <div className="bg-white rounded-xl p-3.5 border border-orange-200 shadow-2xs">
+                <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-3">
+                    <div>
+                      <span className="text-[11px] text-gray-400 block font-medium">Estimated Base Fare</span>
+                      <span className="font-bold text-gray-800 text-sm">{formatCurrency(baseFareAmount)}</span>
+                    </div>
+                    <span className="text-gray-300 font-light text-xl">+</span>
+                    <div>
+                      <span className="text-[11px] text-amber-700 font-bold block">
+                        Accrued Waiting Delay {isGraceExpired ? `(${delayMinutes} min)` : '(Grace)'}
+                      </span>
+                      <span className="font-bold text-amber-700 text-sm">
+                        +{formatCurrency(calculatedWaitingCharges)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="text-right pl-4 border-l border-gray-100">
+                    <span className="text-[11px] text-gray-400 block uppercase font-bold tracking-wider">
+                      Live Total Fare
+                    </span>
+                    <span className="text-lg font-black text-[#FF5B26]">
+                      {formatCurrency(dynamicTotalFare)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                <Info className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                <span>
+                  Delay charges are finalized when the trip begins and added to passenger payment at destination.
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* Action Step Bar based on current status & socket nextAction */}
           {(() => {
             const rawStatus = (ride.status || '').toUpperCase();
@@ -604,10 +1090,13 @@ export function ActiveRideCard({
               !isPaid &&
               (nextAction === 'START_TRIP' ||
               (!nextAction && (rawStatus === 'ARRIVED' || rawStatus === 'DRIVER_ARRIVED')));
+            const shouldDestinationReached =
+              !isPaid &&
+              (rawStatus === 'STARTED' || rawStatus === 'RIDE_STARTED' || rawStatus === 'IN_PROGRESS');
             const shouldCompleteRide =
               !isPaid &&
               (nextAction === 'END_TRIP' ||
-              (!nextAction && (rawStatus === 'STARTED' || rawStatus === 'RIDE_STARTED' || rawStatus === 'IN_PROGRESS')));
+              (!nextAction && (rawStatus === 'STARTED' || rawStatus === 'RIDE_STARTED' || rawStatus === 'IN_PROGRESS' || rawStatus === 'DESTINATION_REACHED')));
             const shouldCollectPayment =
               !isPaid &&
               (nextAction === 'COLLECT_PAYMENT' ||
@@ -618,7 +1107,8 @@ export function ActiveRideCard({
             let stepLabel = 'Ride in progress';
             if (isPaid) stepLabel = 'Payment completed';
             else if (shouldMarkArrived) stepLabel = 'Driver moving to pickup';
-            else if (shouldStartRide) stepLabel = 'Driver arrived at pickup location';
+            else if (shouldStartRide) stepLabel = 'Driver arrived at pickup (waiting)';
+            else if (rawStatus === 'DESTINATION_REACHED') stepLabel = 'Dropoff destination reached';
             else if (shouldCompleteRide) stepLabel = 'Trip currently in progress';
             else if (shouldCollectPayment) stepLabel = 'Trip completed, collect payment';
 
@@ -629,7 +1119,7 @@ export function ActiveRideCard({
                   <span className="font-semibold text-gray-800">{stepLabel}</span>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {/* 1. Mark Arrived */}
                   {shouldMarkArrived && (
                     <button
@@ -660,7 +1150,22 @@ export function ActiveRideCard({
                     </button>
                   )}
 
-                  {/* 3. Complete Ride */}
+                  {/* 3a. Reached Destination */}
+                  {shouldDestinationReached && (
+                    <button
+                      onClick={() => handleDestinationReached(ride)}
+                      disabled={actionLoading === 'destination-reached'}
+                      className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md shadow-indigo-500/20 transition-all flex items-center gap-2"
+                    >
+                      {actionLoading === 'destination-reached' && (
+                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      )}
+                      <Flag className="w-4 h-4" />
+                      Reached Destination
+                    </button>
+                  )}
+
+                  {/* 3b. Complete Ride */}
                   {shouldCompleteRide && (
                     <button
                       onClick={() => handleCompleteRide(ride)}
@@ -679,10 +1184,10 @@ export function ActiveRideCard({
                   {shouldCollectPayment && (
                     <button
                       onClick={() => handleCollectPayment(ride)}
-                      disabled={actionLoading === 'payment'}
+                      disabled={actionLoading === 'payment' || actionLoading === 'payment-prep'}
                       className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-500/20 transition-all flex items-center gap-2"
                     >
-                      {actionLoading === 'payment' && (
+                      {(actionLoading === 'payment' || actionLoading === 'payment-prep') && (
                         <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                       )}
                       <CreditCard className="w-4 h-4" />
@@ -694,6 +1199,34 @@ export function ActiveRideCard({
             );
           })()}
         </div>
+      )}
+
+      {/* In-Ride Chat Modal */}
+      {ride && (
+        <RideChatModal
+          rideId={currentRideId || null}
+          isOpen={isChatOpen}
+          onClose={() => setIsChatOpen(false)}
+          passengerName={
+            ride?.passenger?.fullName ||
+            ride?.passenger?.name ||
+            ride?.passengerName ||
+            'Customer'
+          }
+          passengerPhone={
+            ride?.passenger?.phoneNumber ||
+            ride?.passenger?.phone ||
+            ride?.phoneNumber
+          }
+          passengerAvatar={ride?.passenger?.avatar}
+          messages={chatMessages}
+          isPassengerTyping={isChatPassengerTyping}
+          loading={chatLoading}
+          sending={chatSending}
+          sendMessage={handleSendChatMessage}
+          sendTyping={handleSendChatTyping}
+          markAsRead={handleMarkChatAsRead}
+        />
       )}
     </div>
   );

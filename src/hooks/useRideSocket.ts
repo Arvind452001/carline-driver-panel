@@ -71,10 +71,21 @@ export function useRideSocket(options: UseRideSocketOptions = {}) {
   useEffect(() => {
     const unsub = onRideRequest((req) => {
       console.log('[Socket] Incoming ride:request', req);
-      const reqId = req.rideId || req.requestId || req.id || req._id;
+      const reqId = req.rideId || req.requestId || req.id || req._id || (req as any).tripId;
+      const statusUpper = (req.status || '').toUpperCase();
+
+      // If ride is already assigned by dispatcher, treat as active rather than pending
+      if (statusUpper === 'DRIVER_ASSIGNED' || statusUpper === 'ACCEPTED') {
+        setActiveRide((prev) => prev || (req as unknown as ActiveRide));
+        setNextAction('MARK_ARRIVED');
+        setPendingRequests((prev) =>
+          prev.filter((r) => (r.id || r._id || r.rideId || (r as any).tripId || (r as any).requestId) !== reqId)
+        );
+        return;
+      }
 
       setPendingRequests((prev) => {
-        const exists = prev.some((r) => (r.id || r._id || r.rideId) === reqId);
+        const exists = prev.some((r) => (r.id || r._id || r.rideId || (r as any).tripId || (r as any).requestId) === reqId);
         if (exists) return prev;
         return [req, ...prev];
       });
@@ -129,7 +140,7 @@ export function useRideSocket(options: UseRideSocketOptions = {}) {
     const unsub = onRideTaken((data) => {
       console.log('[Socket] ride:taken event', data);
       setPendingRequests((prev) =>
-        prev.filter((r) => (r.id || r._id || r.rideId) !== data.rideId)
+        prev.filter((r) => (r.id || r._id || r.rideId || (r as any).tripId || (r as any).requestId) !== data.rideId)
       );
 
       options.onRequestTaken?.(data);
@@ -152,9 +163,23 @@ export function useRideSocket(options: UseRideSocketOptions = {}) {
         setNextAction(deriveNextAction(status));
       }
 
+      // If ride is assigned/accepted or in progress, clean up pendingRequests
+      const statusUpper = (status || '').toUpperCase();
+      if (
+        statusUpper === 'ACCEPTED' ||
+        statusUpper === 'DRIVER_ASSIGNED' ||
+        statusUpper === 'ARRIVED' ||
+        statusUpper === 'STARTED' ||
+        statusUpper === 'COMPLETED'
+      ) {
+        setPendingRequests((prev) =>
+          prev.filter((r) => (r.id || r._id || r.rideId || (r as any).tripId || (r as any).requestId) !== rideId)
+        );
+      }
+
       setActiveRide((prev) => {
         if (!prev) return prev;
-        const currentId = prev.id || prev._id || prev.rideId;
+        const currentId = prev.id || prev._id || prev.rideId || (prev as any).tripId;
         if (currentId && currentId !== rideId) return prev;
         return {
           ...prev,
@@ -177,9 +202,14 @@ export function useRideSocket(options: UseRideSocketOptions = {}) {
       console.log('[Socket] ride:driver event', data);
       const { rideId, status, etaMinutes, driver } = data;
 
+      // Clean up from pending requests since driver is assigned
+      setPendingRequests((prev) =>
+        prev.filter((r) => (r.id || r._id || r.rideId || (r as any).tripId || (r as any).requestId) !== rideId)
+      );
+
       setActiveRide((prev) => {
         if (!prev) return prev;
-        const currentId = prev.id || prev._id || prev.rideId;
+        const currentId = prev.id || prev._id || prev.rideId || (prev as any).tripId;
         if (currentId && currentId !== rideId) return prev;
         return {
           ...prev,
@@ -325,17 +355,19 @@ export function useRideSocket(options: UseRideSocketOptions = {}) {
 
   // Emit current driver location helper
   const emitLocation = useCallback(
-    (coords: { latitude: number; longitude: number; heading?: number; speed?: number }) => {
+    (coords: { latitude: number; longitude: number; heading?: number; speed?: number; rideId?: string }) => {
       const currentRideId =
-        activeRideRef.current?.rideId ||
-        activeRideRef.current?.id ||
-        activeRideRef.current?._id;
+        coords.rideId !== undefined
+          ? coords.rideId
+          : activeRideRef.current?.rideId ||
+            activeRideRef.current?.id ||
+            activeRideRef.current?._id;
 
-      sendDriverLocation(
+      return sendDriverLocation(
         {
           latitude: coords.latitude,
           longitude: coords.longitude,
-          rideId: currentRideId,
+          rideId: currentRideId || undefined,
           heading: coords.heading,
           speed: coords.speed,
         },

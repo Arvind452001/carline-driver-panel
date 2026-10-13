@@ -2,13 +2,18 @@ import { axiosInstance } from "./axiosClient";
 import type {
   ActiveRide,
   AcceptRidePayload,
+  RejectRidePayload,
   ArrivedPayload,
   DriverDutyPayload,
   DriverLocationPayload,
   StartRidePayload,
+  DestinationReachedPayload,
   CompleteRidePayload,
   CollectPaymentPayload,
   CancelRidePayload,
+  WaitingStatusResponse,
+  FinalFareResponse,
+  TripTimelineItem,
 } from "@/types/booking";
 
 // Helper to safely unwrap backend data
@@ -85,15 +90,44 @@ export const getRideRequestById = async (id: string) => {
 };
 
 export const acceptRideRequest = async (data: AcceptRidePayload | unknown) => {
-  const res = await axiosInstance.post("/driver-ride/accept", data);
-  // console.log("resp acceptRideRequest:", res?.data);
+  const payload =
+    typeof data === 'object' && data !== null && 'rideId' in data
+      ? { rideId: String((data as any).rideId) }
+      : data;
+  const res = await axiosInstance.post("/driver-ride/accept", payload);
+  return unwrapData(res);
+};
+
+export const rejectRideRequest = async (data: RejectRidePayload | unknown) => {
+  const payload =
+    typeof data === 'object' && data !== null && 'rideId' in data
+      ? { rideId: String((data as any).rideId), reason: (data as any).reason }
+      : data;
+  const res = await axiosInstance.post("/driver-ride/reject", payload);
   return unwrapData(res);
 };
 
 export const markDriverArrived = async (data: ArrivedPayload | unknown) => {
-  const res = await axiosInstance.patch("/driver-ride/arrived", data);
-  // console.log("resp markDriverArrived:", res?.data);
-  return unwrapData(res);
+  try {
+    const res = await axiosInstance.patch("/driver-ride/arrived", data);
+    return unwrapData(res);
+  } catch (err: any) {
+    if (err?.response?.status === 404 || err?.response?.status === 405) {
+      const fallback = await axiosInstance.post("/driver-ride/arrived", data);
+      return unwrapData(fallback);
+    }
+    throw err;
+  }
+};
+
+export const getRideWaitingTime = async (id: string): Promise<WaitingStatusResponse | null> => {
+  try {
+    const res = await axiosInstance.get(`/driver-ride/waiting/${id}`);
+    return unwrapData(res);
+  } catch (err: any) {
+    console.warn(`getRideWaitingTime notice (${id}):`, err?.response?.status, err?.response?.data?.message || err.message);
+    return null;
+  }
 };
 
 export const startRide = async (data: StartRidePayload | unknown) => {
@@ -102,10 +136,40 @@ export const startRide = async (data: StartRidePayload | unknown) => {
   return unwrapData(res);
 };
 
+export const markDestinationReached = async (data: DestinationReachedPayload | unknown) => {
+  const res = await axiosInstance.patch("/driver-ride/destination-reached", data);
+  return unwrapData(res);
+};
+
 export const completeRide = async (data: CompleteRidePayload | unknown) => {
   const res = await axiosInstance.post("/driver-ride/complete", data);
   // console.log("resp completeRide:", res?.data);
   return unwrapData(res);
+};
+
+export const getFinalFare = async (id: string): Promise<FinalFareResponse | null> => {
+  try {
+    const res = await axiosInstance.get(`/driver-ride/final-fare/${id}`);
+    return unwrapData(res);
+  } catch (err: any) {
+    console.warn(`getFinalFare notice (${id}):`, err?.response?.status, err?.response?.data?.message || err.message);
+    return null;
+  }
+};
+
+export const getRideTimeline = async (id: string): Promise<TripTimelineItem[]> => {
+  try {
+    const res = await axiosInstance.get(`/driver-ride/timeline/${id}`);
+    const data = unwrapData(res);
+    if (Array.isArray(data?.timeline)) return data.timeline;
+    if (Array.isArray(data?.events)) return data.events;
+    if (Array.isArray(data?.items)) return data.items;
+    if (Array.isArray(data)) return data;
+    return [];
+  } catch (err: any) {
+    console.warn(`getRideTimeline notice (${id}):`, err?.response?.status, err?.response?.data?.message || err.message);
+    return [];
+  }
 };
 
 export const collectRidePayment = async (data: CollectPaymentPayload | unknown) => {
@@ -119,7 +183,7 @@ export const collectRidePayment = async (data: CollectPaymentPayload | unknown) 
 
 export const cancelRide = async (data: CancelRidePayload | unknown) => {
   const res = await axiosInstance.patch("/driver-ride/cancel", data);
-  // console.log("resp cancelR/ide:/", res?.data);
+  // console.log("resp cancelRide:", res?.data);
   return unwrapData(res);
 };
 

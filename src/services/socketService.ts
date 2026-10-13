@@ -11,9 +11,15 @@ import type {
   RideCancelledSocketPayload,
   RideDriverSocketPayload,
 } from '@/types/socket';
+import type {
+  ChatMessage,
+  ChatTypingPayload,
+  ChatReadPayload,
+  SendMessagePayload,
+} from '@/types/chat';
 
 const DEFAULT_SOCKET_ORIGIN = 'https://node.aitechnotech.in';
-const DEFAULT_SOCKET_PATH = '/carlinee/viamo/socket.io';
+const DEFAULT_SOCKET_PATH = '/viamo/socket.io';
 
 const SOCKET_ORIGIN =
   import.meta.env.VITE_SOCKET_ORIGIN || DEFAULT_SOCKET_ORIGIN;
@@ -64,7 +70,7 @@ class SocketService {
 
     this.socket = io(SOCKET_ORIGIN, {
       path: SOCKET_PATH,
-      transports: ['websocket'],
+      transports: ['websocket', 'polling'],
       auth: {
         token: cleanToken,
       },
@@ -163,12 +169,33 @@ class SocketService {
       return false;
     }
 
+    const lat = typeof data.latitude === 'number' ? data.latitude : Number(data.latitude);
+    const lng = typeof data.longitude === 'number' ? data.longitude : Number(data.longitude);
+
+    if (
+      isNaN(lat) ||
+      isNaN(lng) ||
+      lat < -90 ||
+      lat > 90 ||
+      lng < -180 ||
+      lng > 180
+    ) {
+      console.warn('[Socket] Invalid GPS coordinates discarded:', { lat, lng });
+      return false;
+    }
+
     const payload: DriverLocationEmitPayload = {
-      latitude: data.latitude,
-      longitude: data.longitude,
-      ...(data.rideId ? { rideId: data.rideId } : {}),
-      ...(data.heading !== undefined ? { heading: data.heading } : {}),
-      ...(data.speed !== undefined ? { speed: data.speed } : {}),
+      latitude: lat,
+      longitude: lng,
+      ...(data.rideId && String(data.rideId).trim()
+        ? { rideId: String(data.rideId).trim() }
+        : {}),
+      ...(data.heading !== undefined && !isNaN(Number(data.heading))
+        ? { heading: Number(data.heading) }
+        : {}),
+      ...(data.speed !== undefined && !isNaN(Number(data.speed))
+        ? { speed: Number(data.speed) }
+        : {}),
     };
 
     if (callback) {
@@ -185,6 +212,48 @@ class SocketService {
   public emitJoinRide(rideId: string): boolean {
     if (!this.socket || !this.socket.connected || !rideId) return false;
     this.socket.emit('joinRide', { rideId });
+    return true;
+  }
+
+  /**
+   * Send In-Ride Chat message over socket
+   * Emits `chat:send` and alias `sendMessage`
+   */
+  public emitChatSend(data: SendMessagePayload): boolean {
+    if (!this.socket || !this.socket.connected || !data.rideId || !data.message?.trim()) {
+      return false;
+    }
+    const payload = {
+      rideId: String(data.rideId).trim(),
+      message: String(data.message).trim(),
+    };
+    this.socket.emit('chat:send', payload);
+    this.socket.emit('sendMessage', payload);
+    return true;
+  }
+
+  /**
+   * Emit Driver typing indicator
+   * Emits `chat:typing` with `{ rideId, isTyping }`
+   */
+  public emitChatTyping(data: { rideId: string; isTyping: boolean }): boolean {
+    if (!this.socket || !this.socket.connected || !data.rideId) return false;
+    this.socket.emit('chat:typing', {
+      rideId: String(data.rideId).trim(),
+      isTyping: Boolean(data.isTyping),
+    });
+    return true;
+  }
+
+  /**
+   * Emit chat read event
+   * Emits `chat:read` with `{ rideId }`
+   */
+  public emitChatRead(data: { rideId: string }): boolean {
+    if (!this.socket || !this.socket.connected || !data.rideId) return false;
+    this.socket.emit('chat:read', {
+      rideId: String(data.rideId).trim(),
+    });
     return true;
   }
 
@@ -290,6 +359,42 @@ class SocketService {
     this.socket.on('ride:created', callback);
     return () => {
       this.socket?.off('ride:created', callback);
+    };
+  }
+
+  /**
+   * 10. chat:message - Incoming message from Passenger
+   * Also listens to alias `newMessage`
+   */
+  public onChatMessage(callback: (data: ChatMessage) => void): () => void {
+    if (!this.socket) return () => {};
+    this.socket.on('chat:message', callback);
+    this.socket.on('newMessage', callback);
+    return () => {
+      this.socket?.off('chat:message', callback);
+      this.socket?.off('newMessage', callback);
+    };
+  }
+
+  /**
+   * 11. chat:typing - Passenger typing status indicator
+   */
+  public onChatTyping(callback: (data: ChatTypingPayload) => void): () => void {
+    if (!this.socket) return () => {};
+    this.socket.on('chat:typing', callback);
+    return () => {
+      this.socket?.off('chat:typing', callback);
+    };
+  }
+
+  /**
+   * 12. chat:read - Passenger read receipt
+   */
+  public onChatRead(callback: (data: ChatReadPayload) => void): () => void {
+    if (!this.socket) return () => {};
+    this.socket.on('chat:read', callback);
+    return () => {
+      this.socket?.off('chat:read', callback);
     };
   }
 }

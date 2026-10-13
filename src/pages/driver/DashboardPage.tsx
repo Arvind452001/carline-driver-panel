@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Award,
@@ -24,7 +24,6 @@ import {
   getRideRequests,
   getActiveRide,
   updateDriverDuty,
-  updateDriverLocation,
 } from '@/services/DriverBooking';
 import { getErrorMessage } from '@/services/axiosClient';
 import { formatCurrency } from '@/utils/formatCurrency';
@@ -33,6 +32,7 @@ import { RideDetailsModal } from '@/components/booking/RideDetailsModal';
 import { CreateRideModal } from '@/components/booking/CreateRideModal';
 import { useRideSocket } from '@/hooks/useRideSocket';
 import { useSocket } from '@/context/SocketContext';
+import { useDriverLocationTracker } from '@/hooks/useDriverLocationTracker';
 import Swal from 'sweetalert2';
 
 export function DashboardPage() {
@@ -46,9 +46,6 @@ export function DashboardPage() {
   const [selectedRideData, setSelectedRideData] = useState<any>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Watch position ID ref
-  const watchIdRef = useRef<number | null>(null);
-
   // Socket management hook
   const { reconnect } = useSocket();
   const {
@@ -59,7 +56,6 @@ export function DashboardPage() {
     pendingRequests,
     setPendingRequests,
     nextAction,
-    setNextAction,
     emitLocation,
   } = useRideSocket({
     onTripCompleted: () => {
@@ -68,6 +64,27 @@ export function DashboardPage() {
     onTripPayment: () => {
       loadDashboardData(true);
     },
+  });
+
+  // GPS Location Tracker hook
+  const activeRideId = activeRide?.rideId || activeRide?.id || activeRide?._id || null;
+
+  const {
+    currentCoords,
+    isTracking: isGpsTracking,
+    permissionState: gpsPermission,
+    locationError: gpsError,
+    lastSentMode,
+    retryLocation,
+  } = useDriverLocationTracker({
+    isOnline,
+    activeRideId,
+    isSocketConnected,
+    sendSocketLocation: (payload) => {
+      emitLocation(payload);
+      return isSocketConnected;
+    },
+    throttleMs: 3500,
   });
 
   // Fetch Dashboard and Live Booking Home Data (Initial / periodic load over HTTP)
@@ -141,13 +158,20 @@ export function DashboardPage() {
         localStorage.setItem('driver_is_online', String(backendOnline));
       }
 
-      // Active Ride (Populate if present)
-      if (activeData) {
-        setActiveRide(activeData);
-      } else if (dashData?.activeRide) {
-        setActiveRide(dashData.activeRide);
-      } else if (homeData?.activeRide) {
-        setActiveRide(homeData.activeRide);
+      // Active Ride (Populate if present, including dispatcher assigned rides)
+      const resolvedActiveRide =
+        activeData ||
+        dashData?.activeRide ||
+        homeData?.activeRide ||
+        (Array.isArray(reqsData)
+          ? reqsData.find((r: any) => {
+              const st = (r?.status || '').toUpperCase();
+              return st === 'DRIVER_ASSIGNED' || st === 'ACCEPTED';
+            })
+          : null);
+
+      if (resolvedActiveRide) {
+        setActiveRide(resolvedActiveRide);
       } else {
         // If a ride is completed and waiting for payment collection, preserve it
         setActiveRide((prev) => {
@@ -164,20 +188,33 @@ export function DashboardPage() {
         });
       }
 
-      // Pending requests (Populate if present)
-      if (Array.isArray(reqsData) && reqsData.length > 0) {
-        setPendingRequests(reqsData);
+      // Pending requests (Populate if present, otherwise clear)
+      const currentActiveId = resolvedActiveRide
+        ? (resolvedActiveRide.rideId || (resolvedActiveRide as any)._id || resolvedActiveRide.id || (resolvedActiveRide as any).tripId || (resolvedActiveRide as any).requestId)
+        : null;
+
+      if (Array.isArray(reqsData)) {
+        const filtered = reqsData.filter((r: any) => {
+          const rId = r.rideId || r._id || r.id || r.tripId || r.requestId;
+          if (currentActiveId && rId === currentActiveId) return false;
+          const st = (r?.status || '').toUpperCase();
+          if (st === 'DRIVER_ASSIGNED' || st === 'ACCEPTED' || st === 'ARRIVED' || st === 'STARTED') return false;
+          return true;
+        });
+        setPendingRequests(filtered);
       } else if (Array.isArray(homeData?.pendingRequests)) {
         setPendingRequests(homeData.pendingRequests);
       } else if (Array.isArray(homeData?.requests)) {
         setPendingRequests(homeData.requests);
+      } else {
+        setPendingRequests([]);
       }
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
     } finally {
       if (showIndicator) setRefreshing(false);
     }
-  }, [setActiveRide, setNextAction, setPendingRequests]);
+  }, [setActiveRide, setPendingRequests]);
 
   useEffect(() => {
     loadDashboardData();
@@ -190,80 +227,32 @@ export function DashboardPage() {
     return () => clearInterval(interval);
   }, [loadDashboardData]);
 
-  // Handle Driver Location Updates via Socket and HTTP when Online (every 5-10s)
-  useEffect(() => {
-    if (!isOnline) {
-      if (watchIdRef.current !== null) {
-        navigator.geolocation?.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
-      }
-      return;
-    }
-
-    if (!('geolocation' in navigator)) return;
-
-    const pushLocation = (pos: GeolocationPosition) => {
-      try {
-        const coords = {
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-          heading: pos.coords.heading ?? undefined,
-          speed: pos.coords.speed ?? undefined,
-        };
-        // Emit via real-time socket
-        emitLocation(coords);
-        // Also sync via REST API
-        updateDriverLocation(coords).catch((e) => {
-          console.warn('REST location sync error:', e);
-        });
-      } catch (e) {
-        console.warn('Driver location update error:', e);
-      }
-    };
-
-    // Send an immediate position
-    navigator.geolocation.getCurrentPosition(
-      pushLocation,
-      (err) => {
-        if (err.code !== err.PERMISSION_DENIED) {
-          console.warn('Geolocation error:', err.message);
-        }
-      },
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
-
-    // Watch position & emit location live
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      pushLocation,
-      (err) => {
-        if (err.code !== err.PERMISSION_DENIED) {
-          console.warn('Geolocation watch error:', err.message);
-        }
-      },
-      { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
-    );
-
-    // Periodic heartbeat every 8 seconds while online to guarantee regular updates
-    const heartbeatInterval = setInterval(() => {
-      navigator.geolocation.getCurrentPosition(
-        pushLocation,
-        () => {},
-        { enableHighAccuracy: true, timeout: 8000 }
-      );
-    }, 8000);
-
-    return () => {
-      clearInterval(heartbeatInterval);
-      if (watchIdRef.current !== null) {
-        navigator.geolocation?.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
-      }
-    };
-  }, [isOnline, emitLocation]);
-
   // Handle Duty Toggle (Go Online / Go Offline)
   const handleToggleDuty = async () => {
     const nextStatus = !isOnline;
+
+    // Check if there is an active ongoing trip
+    if (!nextStatus && activeRide) {
+      const activeStatus = (activeRide.status || '').toUpperCase();
+      if (
+        activeStatus === 'ACCEPTED' ||
+        activeStatus === 'ARRIVED' ||
+        activeStatus === 'STARTED' ||
+        activeStatus === 'IN_PROGRESS'
+      ) {
+        const confirmResult = await Swal.fire({
+          title: 'Active Trip In Progress',
+          text: 'You have an active ride in progress. Switching offline will stop new ride offers, but live GPS tracking will continue until your current trip completes.',
+          icon: 'warning',
+          showCancelButton: true,
+          confirmButtonColor: '#FF5B26',
+          confirmButtonText: 'Proceed Offline',
+          cancelButtonText: 'Stay Online',
+        });
+        if (!confirmResult.isConfirmed) return;
+      }
+    }
+
     setDutyLoading(true);
 
     try {
@@ -278,8 +267,8 @@ export function DashboardPage() {
         icon: 'success',
         title: nextStatus ? 'You are now Online!' : 'You are now Offline',
         text: nextStatus
-          ? 'You can now receive incoming ride requests in real time.'
-          : 'You will not receive any ride requests while offline.',
+          ? 'You can now receive incoming ride requests in real time and GPS tracking is active.'
+          : 'You will not receive any new ride requests while offline.',
         confirmButtonColor: '#FF5B26',
         timer: 2000,
         showConfirmButton: false,
@@ -401,6 +390,32 @@ export function DashboardPage() {
               {isOnline ? 'Duty Online' : 'Duty Offline'}
             </span>
 
+            {/* GPS Live Tracking Indicator */}
+            {isGpsTracking ? (
+              <span
+                title={`Live GPS tracking active (${lastSentMode === 'socket' ? 'WebSocket' : lastSentMode === 'rest' ? 'REST Fallback' : 'Acquiring coordinates'})`}
+                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200/60 shadow-sm"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping" />
+                <span>
+                  GPS Live {lastSentMode === 'rest' ? '(REST)' : lastSentMode === 'socket' ? '(Socket)' : ''}
+                </span>
+                {currentCoords && (
+                  <span className="text-[10px] font-mono text-blue-500 hidden md:inline">
+                    [{currentCoords.latitude.toFixed(4)}, {currentCoords.longitude.toFixed(4)}]
+                  </span>
+                )}
+              </span>
+            ) : isOnline ? (
+              <span
+                title="GPS is initializing"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-700 border border-amber-200"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                <span>GPS Initializing...</span>
+              </span>
+            ) : null}
+
             {/* Socket Live Connection Indicator */}
             {isSocketConnected ? (
               <span
@@ -492,12 +507,43 @@ export function DashboardPage() {
         </div>
       </div>
 
+      {/* GPS Permission Warning Banner */}
+      {isOnline && (gpsPermission === 'denied' || gpsError) && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+          <div className="flex items-start gap-3">
+            <MapPin className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-bold text-amber-900">
+                GPS Location Access Notice
+              </p>
+              <p className="text-xs text-amber-700 mt-0.5">
+                {gpsError || 'Browser location permission is required to stream real-time driver coordinates to passengers and dispatchers.'}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={retryLocation}
+            className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors shrink-0 self-start sm:self-center"
+          >
+            Enable Location Access
+          </button>
+        </div>
+      )}
+
       {/* Live Booking & Active Ride Management Section */}
       <ActiveRideCard
         ride={activeRide}
         pendingRequests={pendingRequests}
         nextAction={nextAction}
         onRefresh={() => loadDashboardData(true)}
+        onRemovePendingRequest={(reqId) => {
+          setPendingRequests((prev) =>
+            prev.filter((r: any) => {
+              const rId = r.rideId || r._id || r.id || r.tripId || r.requestId;
+              return rId !== reqId;
+            })
+          );
+        }}
         onViewDetails={(id, rideData) => {
           setSelectedRideId(id);
           setSelectedRideData(

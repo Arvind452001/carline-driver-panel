@@ -21,6 +21,12 @@ import type {
   RideCancelledSocketPayload,
   RideDriverLocationSocketPayload,
 } from '@/types/socket';
+import type {
+  ChatMessage,
+  ChatTypingPayload,
+  ChatReadPayload,
+  SendMessagePayload,
+} from '@/types/chat';
 
 interface SocketContextType {
   socket: Socket | null;
@@ -41,6 +47,13 @@ interface SocketContextType {
   onRidePayment: (callback: (data: RidePaymentSocketPayload) => void) => () => void;
   onRideCancelled: (callback: (data: RideCancelledSocketPayload) => void) => () => void;
   onRideCreated: (callback: (data: any) => void) => () => void;
+  // Chat methods
+  sendChatMessage: (data: SendMessagePayload) => boolean;
+  sendChatTyping: (data: { rideId: string; isTyping: boolean }) => boolean;
+  sendChatRead: (data: { rideId: string }) => boolean;
+  onChatMessage: (callback: (data: ChatMessage) => void) => () => void;
+  onChatTyping: (callback: (data: ChatTypingPayload) => void) => () => void;
+  onChatRead: (callback: (data: ChatReadPayload) => void) => () => void;
 }
 
 const SocketContext = createContext<SocketContextType | undefined>(undefined);
@@ -186,6 +199,31 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     return socketService.onRideCreated(callback);
   }, []);
 
+  // In-Ride Chat callbacks
+  const sendChatMessage = useCallback((data: SendMessagePayload) => {
+    return socketService.emitChatSend(data);
+  }, []);
+
+  const sendChatTyping = useCallback((data: { rideId: string; isTyping: boolean }) => {
+    return socketService.emitChatTyping(data);
+  }, []);
+
+  const sendChatRead = useCallback((data: { rideId: string }) => {
+    return socketService.emitChatRead(data);
+  }, []);
+
+  const onChatMessage = useCallback((callback: (data: ChatMessage) => void) => {
+    return socketService.onChatMessage(callback);
+  }, []);
+
+  const onChatTyping = useCallback((callback: (data: ChatTypingPayload) => void) => {
+    return socketService.onChatTyping(callback);
+  }, []);
+
+  const onChatRead = useCallback((callback: (data: ChatReadPayload) => void) => {
+    return socketService.onChatRead(callback);
+  }, []);
+
   return (
     <SocketContext.Provider
       value={{
@@ -204,6 +242,12 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         onRidePayment,
         onRideCancelled,
         onRideCreated,
+        sendChatMessage,
+        sendChatTyping,
+        sendChatRead,
+        onChatMessage,
+        onChatTyping,
+        onChatRead,
       }}
     >
       {children}

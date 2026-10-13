@@ -37,10 +37,14 @@ export interface FareBreakdown {
   distanceFare?: number;
   timeFare?: number;
   waitingCharge?: number;
+  waitingCharges?: number;
+  waitingMinutes?: number;
+  perMinuteWaitingRate?: number;
   tax?: number;
   discount?: number;
   subtotal?: number;
   total?: number;
+  payableFare?: number;
   driverEarnings?: number;
   commission?: number;
 }
@@ -90,6 +94,7 @@ export interface DriverDutyPayload {
 export interface DriverLocationPayload {
   latitude: number;
   longitude: number;
+  rideId?: string;
   lat?: number;
   lng?: number;
   heading?: number;
@@ -122,6 +127,72 @@ export interface CollectPaymentPayload {
 export interface CancelRidePayload {
   rideId: string;
   reason?: string;
+}
+
+export interface RejectRidePayload {
+  rideId: string;
+  reason?: string;
+}
+
+export interface DestinationReachedPayload {
+  rideId: string;
+  latitude?: number;
+  longitude?: number;
+  distance?: number;
+}
+
+export interface WaitingStatusResponse {
+  rideId?: string;
+  waitingMinutes?: number;
+  waitingSeconds?: number;
+  totalWaitingSeconds?: number;
+  gracePeriodMinutes?: number;
+  gracePeriodSeconds?: number;
+  gracePeriodRemainingSeconds?: number;
+  isGracePeriodExpired?: boolean;
+  perMinuteWaitingRate?: number;
+  ratePerMinute?: number;
+  accruedWaitingCharges?: number;
+  waitingCharge?: number;
+  waitingCharges?: number;
+  baseFare?: number;
+  totalUpdatedFare?: number;
+  estimatedFare?: number;
+  arrivedAt?: string;
+  serverTime?: string;
+  status?: string;
+  [key: string]: any;
+}
+
+export interface FinalFareResponse {
+  rideId?: string;
+  baseFare?: number;
+  distanceFare?: number;
+  timeFare?: number;
+  waitingCharge?: number;
+  waitingCharges?: number;
+  waitingMinutes?: number;
+  extraCharges?: number;
+  extras?: number;
+  tax?: number;
+  discount?: number;
+  subtotal?: number;
+  totalFare?: number;
+  payableFare?: number;
+  total?: number;
+  currency?: string;
+  [key: string]: any;
+}
+
+export interface TripTimelineItem {
+  event?: string;
+  status?: string;
+  title?: string;
+  description?: string;
+  timestamp?: string;
+  time?: string;
+  createdAt?: string;
+  [key: string]: any;
 }
 
 export interface DriverRideHomeData {
