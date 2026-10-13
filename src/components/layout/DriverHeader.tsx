@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { Menu, Bell } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { NotificationDropdown } from '@/components/notification/NotificationDropdown';
 
 interface HeaderProps {
   onMenuClick: () => void;
@@ -14,6 +16,7 @@ export function DriverHeader({
   userAvatar,
   notificationCount,
 }: HeaderProps) {
+  const [dropdownOpen, setDropdownOpen] = useState(false);
   const isOnline = localStorage.getItem('driver_is_online') === 'true';
 
   return (
@@ -52,17 +55,26 @@ export function DriverHeader({
 
         {/* Right actions */}
         <div className="flex items-center gap-3">
-          <Link
-            to="/notifications"
-            className="relative p-2 rounded-xl text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
-          >
-            <Bell className="w-5 h-5" />
-            {notificationCount > 0 && (
-              <span className="absolute 1.5 top-1.5 -right-0.5 w-4 h-4 bg-[#FF5B26] text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-sm">
-                {notificationCount > 9 ? '9+' : notificationCount}
-              </span>
-            )}
-          </Link>
+          {/* Bell Icon & Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setDropdownOpen((prev) => !prev)}
+              aria-label="Open notifications"
+              className="relative p-2 rounded-xl text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors focus:outline-none"
+            >
+              <Bell className="w-5 h-5" />
+              {notificationCount > 0 && (
+                <span className="absolute 1.5 top-1.5 -right-0.5 min-w-[16px] h-4 px-1 bg-[#FF5B26] text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-sm animate-pulse">
+                  {notificationCount > 9 ? '9+' : notificationCount}
+                </span>
+              )}
+            </button>
+
+            <NotificationDropdown
+              isOpen={dropdownOpen}
+              onClose={() => setDropdownOpen(false)}
+            />
+          </div>
 
           <Link
             to="/profile"

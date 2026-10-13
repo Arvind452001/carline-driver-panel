@@ -8,9 +8,9 @@ import {
   mockApplication,
   mockTrips,
   mockTransactions,
-  mockNotifications,
 } from '@/data/mockData';
 import { axiosInstance } from './axiosClient';
+import { notificationService } from './notificationService';
 
 const delay = (ms: number) =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -174,29 +174,20 @@ updateDriverProfile: async (data: Partial<Driver>) => {
   },
 
   getNotifications: async (): Promise<Notification[]> => {
-    await delay(400);
-    return mockNotifications;
+    const res = await notificationService.getMyNotifications(1, 50);
+    return res.notifications;
   },
 
-  markNotificationRead: async (_id: string) => {
-    await delay(300);
-    return {
-      success: true,
-    };
+  markNotificationRead: async (id: string) => {
+    return notificationService.markAsRead(id);
   },
 
   markAllNotificationsRead: async () => {
-    await delay(400);
-    return {
-      success: true,
-    };
+    return notificationService.markAllAsRead();
   },
 
   clearNotifications: async () => {
-    await delay(400);
-    return {
-      success: true,
-    };
+    return notificationService.markAllAsRead();
   },
 
   getSupportTickets: async () => {

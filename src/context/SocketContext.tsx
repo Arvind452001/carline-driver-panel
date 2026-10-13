@@ -27,6 +27,7 @@ import type {
   ChatReadPayload,
   SendMessagePayload,
 } from '@/types/chat';
+import type { SocketNotificationPayload } from '@/types/notification';
 
 interface SocketContextType {
   socket: Socket | null;
@@ -54,6 +55,7 @@ interface SocketContextType {
   onChatMessage: (callback: (data: ChatMessage) => void) => () => void;
   onChatTyping: (callback: (data: ChatTypingPayload) => void) => () => void;
   onChatRead: (callback: (data: ChatReadPayload) => void) => () => void;
+  onNotificationNew: (callback: (data: SocketNotificationPayload) => void) => () => void;
 }
 
 const SocketContext = createContext<SocketContextType | undefined>(undefined);
@@ -224,6 +226,13 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     return socketService.onChatRead(callback);
   }, []);
 
+  const onNotificationNew = useCallback(
+    (callback: (data: SocketNotificationPayload) => void) => {
+      return socketService.onNotificationNew(callback);
+    },
+    []
+  );
+
   return (
     <SocketContext.Provider
       value={{
@@ -248,6 +257,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         onChatMessage,
         onChatTyping,
         onChatRead,
+        onNotificationNew,
       }}
     >
       {children}

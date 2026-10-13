@@ -17,6 +17,7 @@ import type {
   ChatReadPayload,
   SendMessagePayload,
 } from '@/types/chat';
+import type { SocketNotificationPayload } from '@/types/notification';
 
 const DEFAULT_SOCKET_ORIGIN = 'https://node.aitechnotech.in';
 const DEFAULT_SOCKET_PATH = '/viamo/socket.io';
@@ -395,6 +396,22 @@ class SocketService {
     this.socket.on('chat:read', callback);
     return () => {
       this.socket?.off('chat:read', callback);
+    };
+  }
+
+  /**
+   * 13. notification:new - Real-time Push & In-App Notification toast event
+   * Also listens to alias `notification`
+   */
+  public onNotificationNew(
+    callback: (data: SocketNotificationPayload) => void
+  ): () => void {
+    if (!this.socket) return () => {};
+    this.socket.on('notification:new', callback);
+    this.socket.on('notification', callback);
+    return () => {
+      this.socket?.off('notification:new', callback);
+      this.socket?.off('notification', callback);
     };
   }
 }

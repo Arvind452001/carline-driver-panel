@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { DriverSidebar } from '@/components/layout/DriverSidebar';
 import { DriverBottomNav } from '@/components/layout/DriverBottomNav';
 import { DriverHeader } from '@/components/layout/DriverHeader';
+import { NotificationToast } from '@/components/notification/NotificationToast';
 import { useAuth } from '@/hooks/useAuth';
 import { useNotifications } from '@/hooks/useNotifications';
 
@@ -10,7 +11,7 @@ export function DriverLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const { user } = useAuth();
-  const { unreadCount } = useNotifications();
+  const { unreadCount, activeToast, dismissToast, markAsRead } = useNotifications();
   const location = useLocation();
 
   useEffect(() => {
@@ -24,6 +25,13 @@ export function DriverLayout() {
 
   return (
     <div className="min-h-screen bg-slate-50/70 flex w-full max-w-full overflow-x-hidden">
+      {/* Real-time In-App Notification Toast */}
+      <NotificationToast
+        notification={activeToast}
+        onDismiss={dismissToast}
+        onMarkRead={markAsRead}
+      />
+
       {/* Permanent desktop sidebar & mobile drawer */}
       <DriverSidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
